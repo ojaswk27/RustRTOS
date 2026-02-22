@@ -1,1 +1,0 @@
-/home/monarq/Work/academic/os_project/target/thumbv7em-none-eabihf/debug/rtos-rl: /home/monarq/Work/academic/os_project/src/main.rs /home/monarq/Work/academic/os_project/src/policy.rs /home/monarq/Work/academic/os_project/src/scheduler.rs /home/monarq/Work/academic/os_project/src/task.rs
