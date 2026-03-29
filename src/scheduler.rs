@@ -159,8 +159,8 @@ impl Scheduler {
         let _ = hprintln!("Completions:     {}", self.total_completions);
         let _ = hprintln!("Deadline misses: {}", self.total_misses);
         let _ = hprintln!("Context switches:{}", self.context_switches);
-        for t in &self.tasks {
-            let _ = hprintln!("  Task {}: misses={}", t.id, t.deadline_misses);
+        for _t in &self.tasks {
+            let _ = hprintln!("  Task {}: misses={}", _t.id, _t.deadline_misses);
         }
     }
 }
