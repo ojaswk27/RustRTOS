@@ -12,7 +12,6 @@ Three tests are regression guards that pass before and after:
 """
 
 import pytest
-import numpy as np
 from rtos_env import RTOSEnv, IDLE_ACTION
 
 
