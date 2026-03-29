@@ -51,7 +51,6 @@ class TaskSim:
         "abs_deadline",
         "ready",
         "last_scheduled",
-        "completed_this_period",
     )
 
     def __init__(self, period: int, deadline: int, wcet: int):
@@ -60,10 +59,9 @@ class TaskSim:
         self.wcet = wcet
         self.remaining = 0
         self.next_release = 0
-        self.abs_deadline = deadline
+        self.abs_deadline = 0
         self.ready = False
         self.last_scheduled = -1
-        self.completed_this_period = False
 
 
 class RTOSEnv(gym.Env):
@@ -131,22 +129,20 @@ class RTOSEnv(gym.Env):
         return self._build_obs(), {}
 
     def _do_releases(self):
-        """Release tasks whose period boundary has arrived."""
+        """Release tasks whose period boundary has arrived. Runs AFTER _check_deadlines."""
         for t in self.tasks:
             if self.tick >= t.next_release:
                 t.remaining = t.wcet
                 t.abs_deadline = self.tick + t.deadline
                 t.ready = True
-                t.completed_this_period = False
                 t.next_release = self.tick + t.period
 
     def _check_deadlines(self) -> int:
-        """Check and count deadline misses."""
+        """Check for deadline misses. Must run BEFORE _do_releases."""
         misses = 0
         for t in self.tasks:
-            if t.ready and not t.completed_this_period and self.tick >= t.abs_deadline:
+            if t.ready and self.tick >= t.abs_deadline:
                 misses += 1
-                # Abandon this job — task will re-release next period
                 t.ready = False
                 t.remaining = 0
         return misses
@@ -163,11 +159,10 @@ class RTOSEnv(gym.Env):
                 t.last_scheduled = self.tick
                 if t.remaining == 0:
                     t.ready = False
-                    t.completed_this_period = True
                     completions = 1
                     reward += 1.0
 
-        # Context switch penalty
+        # Context switch penalty (task-to-task only)
         if (
             action != self.last_action
             and action != IDLE_ACTION
@@ -178,10 +173,12 @@ class RTOSEnv(gym.Env):
 
         self.tick += 1
 
-        # Release new jobs and check deadline misses
-        self._do_releases()
+        # 1. Check deadlines (before releases — catches misses at period boundaries)
         misses = self._check_deadlines()
         reward -= 2.0 * misses
+
+        # 2. Release new jobs
+        self._do_releases()
 
         self.deadline_misses += misses
         self.completions += completions
