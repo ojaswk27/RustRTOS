@@ -4,20 +4,21 @@
 //! periodic taskset used in Python training, then runs the scheduler for
 //! one hyperperiod (300 ticks). Output goes via semihosting to the QEMU console.
 
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
 
 mod policy;
 mod scheduler;
 mod task;
 
+#[cfg(not(test))]
 use cortex_m_rt::entry;
+#[cfg(not(test))]
 use cortex_m_semihosting::{debug, hprintln};
+#[cfg(not(test))]
 use panic_halt as _;
 
-use scheduler::Scheduler;
-use task::Task;
-
+#[cfg(not(test))]
 #[entry]
 fn main() -> ! {
     let _ = hprintln!("========================================");
@@ -25,18 +26,17 @@ fn main() -> ! {
     let _ = hprintln!("========================================\n");
 
     // Same taskset as Python training: (period, deadline, wcet)
-    // Total utilization ≈ 1.03 — intentionally overloaded to show
-    // how the RL policy minimizes deadline misses under pressure.
+    // Total utilization ≈ 1.03 — intentionally overloaded.
     let tasks = [
-        Task::new(0, 10, 10, 2),
-        Task::new(1, 15, 15, 3),
-        Task::new(2, 20, 20, 4),
-        Task::new(3, 30, 30, 5),
-        Task::new(4, 50, 50, 8),
-        Task::new(5, 100, 100, 10),
+        task::Task::new(0, 10, 10, 2),
+        task::Task::new(1, 15, 15, 3),
+        task::Task::new(2, 20, 20, 4),
+        task::Task::new(3, 30, 30, 5),
+        task::Task::new(4, 50, 50, 8),
+        task::Task::new(5, 100, 100, 10),
     ];
 
-    let mut sched = Scheduler::new(tasks);
+    let mut sched = scheduler::Scheduler::new(tasks);
 
     // Run for one hyperperiod: LCM(10,15,20,30,50,100) = 300 ticks
     sched.run(300);
