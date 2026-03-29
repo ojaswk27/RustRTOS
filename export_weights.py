@@ -114,15 +114,18 @@ pub fn infer(state: &[i32; {in_size}]) -> usize {{
 
 
 def generate_policy_rs(layers: list, path: str) -> None:
-    assert len(layers) == 3, f"Expected 3 layers (two hidden + output), got {len(layers)}"
+    if len(layers) != 3:
+        raise ValueError(f"Expected 3 layers (two hidden + output), got {len(layers)}")
     (w1, b1), (w2, b2), (w3, b3) = layers
 
     in_size = w1.shape[1]   # 24
     h_size = w1.shape[0]    # 32
     out_size = w3.shape[0]  # 7
 
-    assert w2.shape == (h_size, h_size), f"Layer 2 shape mismatch: {w2.shape}"
-    assert w3.shape[1] == h_size, f"Layer 3 input size mismatch: {w3.shape}"
+    if w2.shape != (h_size, h_size):
+        raise ValueError(f"Layer 2 shape mismatch: expected ({h_size}, {h_size}), got {w2.shape}")
+    if w3.shape[1] != h_size:
+        raise ValueError(f"Layer 3 input size mismatch: expected {h_size}, got {w3.shape[1]}")
 
     content = RUST_TEMPLATE.format(
         in_size=in_size,
