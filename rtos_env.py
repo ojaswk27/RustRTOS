@@ -67,7 +67,15 @@ class TaskSim:
 class RTOSEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, taskset=None, max_ticks=300):
+    def __init__(
+        self,
+        taskset=None,
+        max_ticks=300,
+        completion_reward: float = 1.0,
+        miss_penalty: float = -2.0,
+        tick_cost: float = -0.01,
+        context_switch_penalty: float = -0.05,
+    ):
         super().__init__()
         self.taskset_cfg = taskset or NORMAL_TASKSET
         assert len(self.taskset_cfg) <= MAX_TASKS
@@ -86,6 +94,11 @@ class RTOSEnv(gym.Env):
         # Normalization constants derived from taskset
         self.max_deadline = max(d for _, d, _ in self.taskset_cfg)
         self.max_period = max(p for p, _, _ in self.taskset_cfg)
+
+        self.completion_reward = completion_reward
+        self.miss_penalty = miss_penalty
+        self.tick_cost = tick_cost
+        self.context_switch_penalty = context_switch_penalty
 
         self.tasks = []
         self.tick = 0
@@ -148,7 +161,7 @@ class RTOSEnv(gym.Env):
         return misses
 
     def step(self, action: int):
-        reward = -0.01  # small per-tick cost encourages urgency
+        reward = self.tick_cost  # small per-tick cost encourages urgency
 
         # Execute action
         completions = 0
@@ -160,7 +173,7 @@ class RTOSEnv(gym.Env):
                 if t.remaining == 0:
                     t.ready = False
                     completions = 1
-                    reward += 1.0
+                    reward += self.completion_reward
 
         # Context switch penalty (task-to-task only)
         if (
@@ -168,14 +181,14 @@ class RTOSEnv(gym.Env):
             and action != IDLE_ACTION
             and self.last_action != IDLE_ACTION
         ):
-            reward -= 0.05
+            reward += self.context_switch_penalty
         self.last_action = action
 
         self.tick += 1
 
         # 1. Check deadlines (before releases — catches misses at period boundaries)
         misses = self._check_deadlines()
-        reward -= 2.0 * misses
+        reward += self.miss_penalty * misses
 
         # 2. Release new jobs
         self._do_releases()

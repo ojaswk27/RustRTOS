@@ -22,7 +22,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from rtos_env import RTOSEnv, NORMAL_TASKSET, STRESSED_TASKSET, IDLE_ACTION
 
 MODEL_DIR = "ppo_rtos_model"
-TRAIN_STEPS = 500_000
+TRAIN_STEPS = 2_000_000
 EVAL_EPISODES = 100
 
 
@@ -196,7 +196,7 @@ def plot_comparison(results, filename="comparison.png"):
 def main():
     # Train on normal taskset
     print("Creating training environment...")
-    env = RTOSEnv(taskset=NORMAL_TASKSET, max_ticks=300)
+    env = RTOSEnv(taskset=NORMAL_TASKSET, max_ticks=300, miss_penalty=-3.0, completion_reward=1.5)
 
     print(f"Training PPO for {TRAIN_STEPS} steps...")
     model = PPO(
