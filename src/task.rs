@@ -43,7 +43,9 @@ impl Task {
     }
 
     /// Execute one tick of CPU work. Returns true if the task just completed.
+    /// Caller must ensure `ready == true` and `remaining > 0` before calling.
     pub fn tick_execute(&mut self, tick: u32) -> bool {
+        debug_assert!(self.ready && self.remaining > 0, "tick_execute called on non-ready task");
         self.last_scheduled = tick as i32;
         self.remaining -= 1;
         if self.remaining == 0 {
