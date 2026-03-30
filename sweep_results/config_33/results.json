@@ -1,6 +1,6 @@
 {
-  "config_id": 9,
-  "miss_penalty": -2.0,
+  "config_id": 33,
+  "miss_penalty": -5.0,
   "completion_reward": 2.0,
   "urgency_weight": 0.1,
   "tick_cost": -0.01,
@@ -9,6 +9,6 @@
   "normal_misses_std": 0.0,
   "stressed_misses_mean": 9.0,
   "stressed_misses_std": 0.0,
-  "stressed_reward_mean": 48.70000000000001,
-  "model_path": "sweep_results/config_9/ppo_rtos.zip"
+  "stressed_reward_mean": 49.30000000000005,
+  "model_path": "sweep_results/config_33/ppo_rtos.zip"
 }

@@ -16,7 +16,7 @@ At inference time the network runs on a bare-metal ARM Cortex-M4 (emulated in QE
 
 ### Scheduler Tick Loop
 
-Each "tick" is one unit of simulated time. The scheduler runs the following steps every tick:
+Every tick, the scheduler does four things in order: check if any tasks ran out of time, release any tasks whose period has come around again, ask the neural network which task to run, and then run it for one tick. The ordering matters — deadline checks happen before releases so that a task expiring right at its period boundary is counted as a miss rather than quietly overwritten by the new job.
 
 ```
 procedure SCHEDULER_TICK(tasks[], tick):
@@ -53,7 +53,7 @@ procedure SCHEDULER_TICK(tasks[], tick):
 
 ### State Encoding
 
-The network gets a 24-element observation: 4 numbers per task, 6 tasks. Non-ready tasks are all zeros so the network can tell they don't have a pending job.
+Before the network can make a decision, we need to describe the current situation to it as a list of numbers. We give it 4 numbers for each of the 6 tasks: how close it is to its deadline, how long it has been waiting, how much work it still has left, and whether it even has a job to run right now. All values are normalized to the range [0, 1] so the network does not have to deal with wildly different scales. Tasks that have no pending job get all zeros, which signals to the network that they can be ignored.
 
 ```
 procedure BUILD_STATE(tasks[], tick) → obs[24]:
@@ -82,7 +82,7 @@ procedure BUILD_STATE(tasks[], tick) → obs[24]:
 
 ### Neural Network Inference (Q10 Fixed-Point)
 
-A two-hidden-layer MLP: 24 inputs → 32 → 32 → 7 outputs. The output with the highest value is the chosen action.
+The network is a standard feedforward neural network with two hidden layers of 32 neurons each. It takes the 24 numbers from the state encoding as input and produces 7 output scores, one for each possible action (run task 0 through 5, or go idle). The action with the highest score is picked. The only unusual aspect is that all the math uses integers instead of floating point, which is necessary to run efficiently on a microcontroller without worrying about FPU overhead or floating point reproducibility across platforms.
 
 ```
 procedure NN_INFER(obs[24]) → action:
@@ -113,7 +113,9 @@ The `>> 10` is the Q10 descale (equivalent to dividing by 1024). All operations 
 
 ### PPO Training
 
-Training runs offline in Python using stable-baselines3. The environment simulates the same tick loop above as a Gymnasium env.
+Training happens offline on a PC, not on the microcontroller. We simulate the RTOS environment in Python and run the PPO algorithm, which works by having the agent play through many episodes of the scheduler and nudging the policy towards actions that led to better outcomes. The clip in the loss function is PPO's key trick: it limits how much the policy is allowed to change in a single update, which keeps training stable.
+
+The reward design is where the real engineering judgement comes in. Every tick costs a small amount to push the agent towards finishing things quickly. Completing a task earns a reward, missing a deadline is penalized, and switching between tasks carries a small penalty to discourage unnecessary preemption.
 
 ```
 procedure TRAIN():
@@ -147,7 +149,7 @@ The reward values (`−3.0` miss penalty, `+1.5` completion reward) were selecte
 
 ### Weight Export
 
-After training, the actor network weights are multiplied by 1024 and rounded to integers, then written directly into Rust source as static arrays.
+Once training is done, the learned weights only exist as floating-point numbers inside Python. To get them onto the microcontroller we multiply every weight by 1024 and round to the nearest integer, turning them into Q10 fixed-point values. These are then written out as plain Rust arrays that get compiled directly into the firmware — no file loading, no dynamic allocation, just constants baked into the binary.
 
 ```
 procedure EXPORT_WEIGHTS(policy):
@@ -165,7 +167,9 @@ We tested on two tasksets. Both are intentionally overloaded (total utilization 
 
 ### Task Attributes
 
-Each task in the scheduler has two kinds of attributes: static configuration that never changes, and dynamic state that gets updated every tick.
+Each task is modeled as a periodic job that repeats forever. It wakes up, needs some amount of CPU time to finish, and has a deadline to finish by. The scheduler sees a snapshot of every task's current state each tick and decides which one to run next.
+
+Each task has two kinds of attributes: static configuration that never changes, and dynamic state that gets updated every tick.
 
 **Static (set at task creation):**
 

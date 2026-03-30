@@ -19,11 +19,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from rtos_env import RTOSEnv, NORMAL_TASKSET, STRESSED_TASKSET, IDLE_ACTION
+from rtos_env import RTOSEnv, RandomRTOSEnv, NORMAL_TASKSET, STRESSED_TASKSET, IDLE_ACTION
 
 MODEL_DIR = "ppo_rtos_model"
 TRAIN_STEPS = 2_000_000
 EVAL_EPISODES = 100
+
+# Best reward config found via sweep
+REWARD_KWARGS = dict(
+    miss_penalty=-3.0,
+    completion_reward=1.5,
+    urgency_weight=0.1,
+    context_switch_penalty=-0.02,
+    variable_exec=True,
+)
 
 
 # ── Baseline schedulers ────────────────────────────────────────────────
@@ -193,15 +202,13 @@ def plot_comparison(results, filename="comparison.png"):
 # ── Main ───────────────────────────────────────────────────────────────
 
 
-def main():
-    # Train on normal taskset
-    print("Creating training environment...")
-    env = RTOSEnv(taskset=NORMAL_TASKSET, max_ticks=300, miss_penalty=-3.0, completion_reward=1.5)
+def make_env(utilization_range):
+    return RandomRTOSEnv(utilization_range=utilization_range, max_ticks=300, **REWARD_KWARGS)
 
-    print(f"Training PPO for {TRAIN_STEPS} steps...")
-    model = PPO(
-        "MlpPolicy",
-        env,
+
+def main():
+    phase_steps = TRAIN_STEPS // 3
+    ppo_kwargs = dict(
         policy_kwargs=dict(net_arch=[32, 32]),
         n_steps=2048,
         batch_size=64,
@@ -210,8 +217,26 @@ def main():
         device="cpu",
         verbose=1,
     )
+
     logger = RewardLogger()
-    model.learn(total_timesteps=TRAIN_STEPS, callback=logger)
+
+    # Phase 1: feasible tasksets — agent learns urgency ordering with clean signal
+    print(f"Phase 1/3: Feasible tasksets (U=0.60-0.95), {phase_steps:,} steps...")
+    env1 = make_env((0.60, 0.95))
+    model = PPO("MlpPolicy", env1, **ppo_kwargs)
+    model.learn(total_timesteps=phase_steps, callback=logger, reset_num_timesteps=True)
+
+    # Phase 2: mixed — introduce overload gradually
+    print(f"Phase 2/3: Mixed tasksets (U=0.85-1.10), {phase_steps:,} steps...")
+    model.set_env(make_env((0.85, 1.10)))
+    model.learn(total_timesteps=phase_steps, callback=logger, reset_num_timesteps=False)
+
+    # Phase 3: overloaded — full generalization pressure
+    print(f"Phase 3/3: Overloaded tasksets (U=0.95-1.20), {phase_steps:,} steps...")
+    model.set_env(make_env((0.95, 1.20)))
+    model.learn(total_timesteps=phase_steps, callback=logger, reset_num_timesteps=False)
+
+    os.makedirs(MODEL_DIR, exist_ok=True)
     model.save(os.path.join(MODEL_DIR, "ppo_rtos"))
     print(f"Model saved to {MODEL_DIR}/")
 
