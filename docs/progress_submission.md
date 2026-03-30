@@ -8,7 +8,7 @@
 
 The idea is to replace a traditional hand-written scheduling policy (like EDF or RMS) with a small neural network trained using reinforcement learning. Instead of programming rules like "always pick the task closest to its deadline", we let the agent figure out a good policy on its own by giving it rewards for completing tasks on time and penalties for missing deadlines.
 
-At inference time the network runs on a bare-metal ARM Cortex-M4 (emulated in QEMU). Since the M4 has an FPU but we want to keep things simple and portable, all the weights are stored as Q10 fixed-point integers — every multiply is just an integer multiply followed by a right-shift by 10.
+At inference time the network runs on a bare-metal ARM Cortex-M4 (emulated in QEMU). Since the M4 has an FPU but we want to keep things simple and portable, all the weights are stored as Q10 fixed-point integers. Every multiply is just an integer multiply followed by a right-shift by 10.
 
 ---
 
@@ -53,7 +53,7 @@ procedure SCHEDULER_TICK(tasks[], tick):
 
 ### State Encoding
 
-The network gets a 24-element observation — 4 numbers per task, 6 tasks. Non-ready tasks are all zeros so the network can tell they don't have a pending job.
+The network gets a 24-element observation: 4 numbers per task, 6 tasks. Non-ready tasks are all zeros so the network can tell they don't have a pending job.
 
 ```
 procedure BUILD_STATE(tasks[], tick) → obs[24]:
@@ -109,7 +109,7 @@ procedure NN_INFER(obs[24]) → action:
     return argmax(out)
 ```
 
-The `>> 10` is the Q10 descale — equivalent to dividing by 1024. All operations are saturating 32-bit integer arithmetic so there's no overflow on the Cortex-M4.
+The `>> 10` is the Q10 descale (equivalent to dividing by 1024). All operations are saturating 32-bit integer arithmetic so there's no overflow on the Cortex-M4.
 
 ### PPO Training
 
@@ -143,7 +143,7 @@ procedure TRAIN():
             update policy
 ```
 
-The reward values (`−3.0` miss penalty, `+1.5` completion reward) were selected from a grid search — we trained 16 configurations in parallel and picked the one with the fewest deadline misses on the stressed taskset.
+The reward values (`−3.0` miss penalty, `+1.5` completion reward) were selected from a grid search where we trained 16 configurations in parallel and picked the one with the fewest deadline misses on the stressed taskset.
 
 ### Weight Export
 
@@ -161,19 +161,27 @@ procedure EXPORT_WEIGHTS(policy):
 
 ## Preliminary Results
 
-We tested on two tasksets. Both are intentionally overloaded (total utilization > 1.0), so some deadline misses are unavoidable — the goal is just to minimize them.
+We tested on two tasksets. Both are intentionally overloaded (total utilization > 1.0), so some deadline misses are unavoidable. The goal is just to minimize them.
 
 ### Tasksets
 
-| Task | Period | Deadline | WCET (normal) | WCET (stressed) |
-|------|--------|----------|--------------|-----------------|
-| T0   | 10     | 10       | 2            | 3               |
-| T1   | 15     | 15       | 3            | 3               |
-| T2   | 20     | 20       | 4            | 4               |
-| T3   | 30     | 30       | 5            | 5               |
-| T4   | 50     | 50       | 8            | 8               |
-| T5   | 100    | 100      | 10           | 12              |
-| **U** | | | **≈ 1.03** | **≈ 1.15** |
+The taskset consists of 6 periodic tasks with implicit deadlines (deadline = period). Each task represents a recurring job that must complete within its period. Think of T0 as something like a sensor read happening every 10ms, T3 as a slower control loop every 30ms, and T5 as a background logging or housekeeping task every 100ms. The tasks span a range of periods (10 to 100 ticks) which is typical of a mixed-criticality embedded workload where high-frequency tasks tend to be shorter and lower-frequency tasks tend to do more work.
+
+The key quantity is utilization: U = sum of (WCET / period) across all tasks. If U ≤ 1.0 the workload is theoretically schedulable (EDF can always meet all deadlines). We deliberately push U slightly above 1.0 so that no scheduler can be perfect. This forces the agent to make trade-offs about which tasks to deprioritize, which is a more interesting learning problem.
+
+The stressed taskset increases WCET on T0 (the most frequent task) and T5 (the longest task), pushing U to 1.15. The scheduler was never trained on this taskset, so it tests whether the learned policy generalizes beyond its training distribution.
+
+| Task | Period | Deadline | WCET (normal) | WCET (stressed) | U (normal) |
+|------|--------|----------|--------------|-----------------|------------|
+| T0   | 10     | 10       | 2            | 3               | 0.20       |
+| T1   | 15     | 15       | 3            | 3               | 0.20       |
+| T2   | 20     | 20       | 4            | 4               | 0.20       |
+| T3   | 30     | 30       | 5            | 5               | 0.17       |
+| T4   | 50     | 50       | 8            | 8               | 0.16       |
+| T5   | 100    | 100      | 10           | 12              | 0.10       |
+| **Total** | | | | | **≈ 1.03** |
+
+One subtlety worth noting: T0, T1, and T2 each contribute 0.20 to utilization individually but have very different periods. T0 fires 10 times for every one firing of T5. This means a bad scheduler that ignores T0's frequency (like Round Robin, which treats all tasks equally) will miss T0's deadlines far more often than it misses T5's, even though both look equally important on paper. EDF handles this naturally by always chasing the nearest deadline. Part of what we're testing is whether the RL agent picks up on the same intuition.
 
 ### Normal Taskset (U ≈ 1.03)
 
@@ -184,7 +192,7 @@ We tested on two tasksets. Both are intentionally overloaded (total utilization 
 | **PPO (ours)** | **4.0** | **55.2** |
 | Round Robin | 12.0 | 30.4 |
 
-### Stressed Taskset (U ≈ 1.15) — trained only on normal
+### Stressed Taskset (U ≈ 1.15, trained only on normal)
 
 | Scheduler | Avg Deadline Misses | Avg Reward |
 |-----------|-------------------|------------|
@@ -193,15 +201,15 @@ We tested on two tasksets. Both are intentionally overloaded (total utilization 
 | EDF | 7.0 | 55.1 |
 | Round Robin | 39.0 | −50.9 |
 
-On the normal taskset PPO comes in just behind EDF and RMS, which is expected since EDF is optimal for this class of problem and we're learning from scratch. The more interesting result is on the stressed taskset — PPO was never trained on it but matches EDF exactly (7 misses each), while Round Robin completely falls apart (39 misses). This suggests the policy is learning something more general than just memorizing the training distribution.
+On the normal taskset PPO comes in just behind EDF and RMS, which is expected since EDF is optimal for this class of problem and we're learning from scratch. The more interesting result is on the stressed taskset. PPO was never trained on it but matches EDF exactly (7 misses each), while Round Robin completely falls apart (39 misses). This suggests the policy is learning something more general than just memorizing the training distribution.
 
 ---
 
 ## What's Done So Far
 
-- Python simulation environment and training pipeline — complete
-- EDF, RMS, Round Robin baselines for comparison — complete
-- Reward function tuning via parallel grid search — complete
-- Q10 weight export to Rust — complete
-- Rust scheduler + NN inference on bare-metal Cortex-M4 (QEMU) — complete
-- Trained model — complete
+- Python simulation environment and training pipeline: complete
+- EDF, RMS, Round Robin baselines for comparison: complete
+- Reward function tuning via parallel grid search: complete
+- Q10 weight export to Rust: complete
+- Rust scheduler + NN inference on bare-metal Cortex-M4 (QEMU): complete
+- Trained model: complete
