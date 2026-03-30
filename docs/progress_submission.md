@@ -163,6 +163,30 @@ procedure EXPORT_WEIGHTS(policy):
 
 We tested on two tasksets. Both are intentionally overloaded (total utilization > 1.0), so some deadline misses are unavoidable. The goal is just to minimize them.
 
+### Task Attributes
+
+Each task in the scheduler has two kinds of attributes: static configuration that never changes, and dynamic state that gets updated every tick.
+
+**Static (set at task creation):**
+
+| Attribute | Description |
+|-----------|-------------|
+| `period` | How often the task fires. A new job is released every `period` ticks. |
+| `deadline` | How long the task has to finish after being released. We use implicit deadlines, so `deadline == period` for all tasks. |
+| `wcet` | Worst-case execution time. The number of ticks the task needs to run to completion. |
+
+**Dynamic (updated at runtime):**
+
+| Attribute | Description |
+|-----------|-------------|
+| `ready` | True if this task has a pending job that still needs CPU time. False after completion or a deadline miss. |
+| `remaining` | Ticks of CPU work still needed for the current job. Starts at `wcet` on release, counts down to 0. |
+| `abs_deadline` | The absolute tick by which the current job must finish (`release_tick + deadline`). |
+| `next_release` | The tick when the next job will be released (`release_tick + period`). |
+| `last_scheduled` | The last tick this task was given the CPU. Used to compute the `time_since_scheduled` feature. -1 if the task has never run. |
+
+A task is considered to have missed its deadline if `ready` is still true when `tick >= abs_deadline`. When that happens, `ready` and `remaining` are both reset to 0 (the job is discarded) and the miss is counted. A new job is then released at the next period boundary as normal.
+
 ### Tasksets
 
 The taskset consists of 6 periodic tasks with implicit deadlines (deadline = period). Each task represents a recurring job that must complete within its period. Think of T0 as something like a sensor read happening every 10ms, T3 as a slower control loop every 30ms, and T5 as a background logging or housekeeping task every 100ms. The tasks span a range of periods (10 to 100 ticks) which is typical of a mixed-criticality embedded workload where high-frequency tasks tend to be shorter and lower-frequency tasks tend to do more work.
