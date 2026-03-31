@@ -14,8 +14,8 @@ Variants:
   RandomRTOSEnv  — fresh random taskset every episode, optional variable exec
 """
 
-import numpy as np
 import gymnasium as gym
+import numpy as np
 from gymnasium import spaces
 
 # Default taskset (period, deadline, wcet) — U ≈ 1.03
@@ -78,11 +78,11 @@ class RTOSEnv(gym.Env):
         self,
         taskset=None,
         max_ticks=300,
-        completion_reward: float = 1.0,
-        miss_penalty: float = -2.0,
+        completion_reward: float = 2.0,
+        miss_penalty: float = -3.0,
         tick_cost: float = -0.01,
         context_switch_penalty: float = -0.05,
-        urgency_weight: float = 0.0,
+        urgency_weight: float = 0.1,
         variable_exec: bool = False,
     ):
         super().__init__()
@@ -103,6 +103,7 @@ class RTOSEnv(gym.Env):
         # Normalization constants derived from taskset
         self.max_deadline = max(d for _, d, _ in self.taskset_cfg)
         self.max_period = max(p for p, _, _ in self.taskset_cfg)
+        self.max_wcet = max(w for _, _, w in self.taskset_cfg)
 
         self.completion_reward = completion_reward
         self.miss_penalty = miss_penalty
@@ -128,8 +129,7 @@ class RTOSEnv(gym.Env):
         n_ready = len(ready_indices)
         # Most urgent → 1.0, least urgent → 1/n_ready, not ready → 0.0
         urgency_rank = {
-            idx: (n_ready - rank) / n_ready
-            for rank, idx in enumerate(ready_indices)
+            idx: (n_ready - rank) / n_ready for rank, idx in enumerate(ready_indices)
         }
 
         for i, t in enumerate(self.tasks):
@@ -204,6 +204,11 @@ class RTOSEnv(gym.Env):
                     completions = 1
                     reward += self.completion_reward
 
+            # WCET-based penalty: penalize selection of heavy tasks
+            # This encourages selection of light tasks (typically short-period tasks)
+            wcet_penalty = 0.1 * (t.wcet / self.max_wcet)
+            reward -= wcet_penalty
+
         # Context switch penalty (task-to-task only)
         if (
             action != self.last_action
@@ -262,6 +267,7 @@ class RandomRTOSEnv(RTOSEnv):
         self.n_tasks = len(taskset)
         self.max_deadline = max(d for _, d, _ in taskset)
         self.max_period = max(p for p, _, _ in taskset)
+        self.max_wcet = max(w for _, _, w in taskset)
 
         return super().reset(seed=seed, options=options)
 

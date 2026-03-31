@@ -63,32 +63,32 @@ REWARD_KWARGS = dict(
 # 4-stage curriculum
 TRAINING_STAGES = [
     {
-        "name": "Feasible",
+        "name": "Light-Task Learning",
         "steps": 1_000_000,
-        "utilization_range": (0.60, 0.95),
-        "wcet_variability": 0.0,  # Fixed WCET
-        "description": "Learn basic urgency ordering on feasible tasksets",
+        "utilization_range": (0.70, 0.90),
+        "wcet_variability": 0.0,  # Fixed WCET - make light task advantage obvious
+        "description": "Learn light-task preference (fixed execution time, feasible region)",
     },
     {
-        "name": "Mixed",
+        "name": "Deadline Pressure",
         "steps": 1_500_000,
-        "utilization_range": (0.85, 1.15),
-        "wcet_variability": 0.15,  # 15% WCET variability
-        "description": "Introduce mixed overload and small variability",
+        "utilization_range": (0.85, 1.10),
+        "wcet_variability": 0.10,  # ±10% deadline variance - show why it matters
+        "description": "Mild pressure - light tasks become critical under deadlines",
     },
     {
-        "name": "Overloaded",
+        "name": "Robust Prioritization",
         "steps": 1_500_000,
-        "utilization_range": (1.10, 1.35),
-        "wcet_variability": 0.30,  # 30% WCET variability
-        "description": "Heavy overload with moderate variability",
+        "utilization_range": (1.05, 1.25),
+        "wcet_variability": 0.20,  # ±20% execution time variability
+        "description": "Overload - robust light-task prioritization under uncertainty",
     },
     {
-        "name": "Extreme",
+        "name": "Extreme Stress",
         "steps": 1_000_000,
-        "utilization_range": (1.25, 1.50),
-        "wcet_variability": 0.40,  # 40% WCET variability
-        "description": "Extreme stress with high variability",
+        "utilization_range": (1.30, 1.50),
+        "wcet_variability": 0.30,  # ±30% execution time variability
+        "description": "Extreme stress - survive by completing light tasks",
     },
 ]
 
