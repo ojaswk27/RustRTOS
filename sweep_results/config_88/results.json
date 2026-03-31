@@ -1,0 +1,14 @@
+{
+  "config_id": 88,
+  "miss_penalty": -5.0,
+  "completion_reward": 1.5,
+  "urgency_weight": 0.1,
+  "tick_cost": -0.01,
+  "context_switch_penalty": -0.02,
+  "normal_misses_mean": 3.0,
+  "normal_misses_std": 0.0,
+  "stressed_misses_mean": 10.0,
+  "stressed_misses_std": 0.0,
+  "stressed_reward_mean": 44.69999999999999,
+  "model_path": "sweep_results/config_88/ppo_rtos.zip"
+}

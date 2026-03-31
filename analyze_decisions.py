@@ -154,6 +154,8 @@ def visualize_decisions(results, output_file):
 
         periods = np.array([t[0] for t in taskset])
         decision_counts = np.bincount(decisions, minlength=len(taskset))
+        # Ensure decision_counts has exactly the right length (trim if necessary)
+        decision_counts = decision_counts[: len(taskset)]
 
         # Bar chart
         rms_task = analysis["rms_preferred"]

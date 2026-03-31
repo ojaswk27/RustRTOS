@@ -1,0 +1,230 @@
+{
+  "Normal (U\u22481.03)": {
+    "PPO": {
+      "misses": 5.0,
+      "misses_std": 0.0,
+      "reward": 130.45033333333333,
+      "reward_std": 2.842170943040401e-14
+    },
+    "Round Robin": {
+      "misses": 12.0,
+      "misses_std": 0.0,
+      "reward": 87.66633333333336,
+      "reward_std": 1.4210854715202004e-14
+    },
+    "RMS": {
+      "misses": 3.0,
+      "misses_std": 0.0,
+      "reward": 137.98033333333328,
+      "reward_std": 0.0
+    },
+    "EDF": {
+      "misses": 2.0,
+      "misses_std": 0.0,
+      "reward": 146.52299999999994,
+      "reward_std": 0.0
+    },
+    "LSF": {
+      "misses": 7.0,
+      "misses_std": 0.0,
+      "reward": 118.29833333333336,
+      "reward_std": 1.4210854715202004e-14
+    },
+    "Budget Burn Rate": {
+      "misses": 8.0,
+      "misses_std": 0.0,
+      "reward": 110.34900000000007,
+      "reward_std": 0.0
+    }
+  },
+  "Stressed (U\u22481.15)": {
+    "PPO": {
+      "misses": 8.0,
+      "misses_std": 0.0,
+      "reward": 121.21466666666673,
+      "reward_std": 1.4210854715202004e-14
+    },
+    "Round Robin": {
+      "misses": 39.0,
+      "misses_std": 0.0,
+      "reward": -45.060666666666656,
+      "reward_std": 0.0
+    },
+    "RMS": {
+      "misses": 5.0,
+      "misses_std": 0.0,
+      "reward": 132.56000000000006,
+      "reward_std": 0.0
+    },
+    "EDF": {
+      "misses": 7.0,
+      "misses_std": 0.0,
+      "reward": 127.48966666666678,
+      "reward_std": 0.0
+    },
+    "LSF": {
+      "misses": 18.0,
+      "misses_std": 0.0,
+      "reward": 67.57666666666671,
+      "reward_std": 0.0
+    },
+    "Budget Burn Rate": {
+      "misses": 24.0,
+      "misses_std": 0.0,
+      "reward": 35.43833333333328,
+      "reward_std": 0.0
+    }
+  },
+  "U_1_20": {
+    "PPO": {
+      "misses": 12.0,
+      "misses_std": 0.0,
+      "reward": 100.80854545454545,
+      "reward_std": 1.4210854715202004e-14
+    },
+    "Round Robin": {
+      "misses": 49.0,
+      "misses_std": 0.0,
+      "reward": -96.7052727272727,
+      "reward_std": 2.842170943040401e-14
+    },
+    "RMS": {
+      "misses": 9.0,
+      "misses_std": 0.0,
+      "reward": 111.306818181818,
+      "reward_std": 0.0
+    },
+    "EDF": {
+      "misses": 13.0,
+      "misses_std": 0.0,
+      "reward": 96.77054545454543,
+      "reward_std": 1.4210854715202004e-14
+    },
+    "LSF": {
+      "misses": 29.0,
+      "misses_std": 0.0,
+      "reward": 12.026787878787873,
+      "reward_std": 1.7763568394002505e-15
+    },
+    "Budget Burn Rate": {
+      "misses": 34.0,
+      "misses_std": 0.0,
+      "reward": -14.850030303030307,
+      "reward_std": 1.7763568394002505e-15
+    }
+  },
+  "U_1_30": {
+    "PPO": {
+      "misses": 20.0,
+      "misses_std": 0.0,
+      "reward": 62.84466666666669,
+      "reward_std": 7.105427357601002e-15
+    },
+    "Round Robin": {
+      "misses": 74.0,
+      "misses_std": 0.0,
+      "reward": -221.06266666666656,
+      "reward_std": 0.0
+    },
+    "RMS": {
+      "misses": 14.0,
+      "misses_std": 0.0,
+      "reward": 87.76999999999994,
+      "reward_std": 2.842170943040401e-14
+    },
+    "EDF": {
+      "misses": 18.0,
+      "misses_std": 0.0,
+      "reward": 73.43533333333326,
+      "reward_std": 0.0
+    },
+    "LSF": {
+      "misses": 45.0,
+      "misses_std": 0.0,
+      "reward": -67.00299999999999,
+      "reward_std": 0.0
+    },
+    "Budget Burn Rate": {
+      "misses": 48.0,
+      "misses_std": 0.0,
+      "reward": -83.51333333333334,
+      "reward_std": 1.4210854715202004e-14
+    }
+  },
+  "U_1_40": {
+    "PPO": {
+      "misses": 21.0,
+      "misses_std": 0.0,
+      "reward": 59.33041025641029,
+      "reward_std": 0.0
+    },
+    "Round Robin": {
+      "misses": 79.0,
+      "misses_std": 0.0,
+      "reward": -246.76541025641004,
+      "reward_std": 0.0
+    },
+    "RMS": {
+      "misses": 14.0,
+      "misses_std": 0.0,
+      "reward": 88.15602564102565,
+      "reward_std": 0.0
+    },
+    "EDF": {
+      "misses": 18.0,
+      "misses_std": 0.0,
+      "reward": 74.75792307692308,
+      "reward_std": 0.0
+    },
+    "LSF": {
+      "misses": 49.0,
+      "misses_std": 0.0,
+      "reward": -86.08833333333334,
+      "reward_std": 0.0
+    },
+    "Budget Burn Rate": {
+      "misses": 52.0,
+      "misses_std": 0.0,
+      "reward": -102.08320512820507,
+      "reward_std": 0.0
+    }
+  },
+  "U_1_50": {
+    "PPO": {
+      "misses": 30.0,
+      "misses_std": 0.0,
+      "reward": 14.823857142857134,
+      "reward_std": 0.0
+    },
+    "Round Robin": {
+      "misses": 81.0,
+      "misses_std": 0.0,
+      "reward": -256.64119047619084,
+      "reward_std": 0.0
+    },
+    "RMS": {
+      "misses": 24.0,
+      "misses_std": 0.0,
+      "reward": 39.15714285714289,
+      "reward_std": 0.0
+    },
+    "EDF": {
+      "misses": 25.0,
+      "misses_std": 0.0,
+      "reward": 40.941000000000024,
+      "reward_std": 0.0
+    },
+    "LSF": {
+      "misses": 55.0,
+      "misses_std": 0.0,
+      "reward": -115.09290476190476,
+      "reward_std": 1.4210854715202004e-14
+    },
+    "Budget Burn Rate": {
+      "misses": 61.0,
+      "misses_std": 0.0,
+      "reward": -146.4890952380954,
+      "reward_std": 0.0
+    }
+  }
+}

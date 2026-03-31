@@ -12,14 +12,22 @@ Outputs: ppo_rtos_model/, training_reward.png, comparison.png
 """
 
 import os
-import numpy as np
+
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from rtos_env import RTOSEnv, RandomRTOSEnv, NORMAL_TASKSET, STRESSED_TASKSET, IDLE_ACTION
+
+from rtos_env import (
+    IDLE_ACTION,
+    NORMAL_TASKSET,
+    STRESSED_TASKSET,
+    RandomRTOSEnv,
+    RTOSEnv,
+)
 
 MODEL_DIR = "ppo_rtos_model"
 TRAIN_STEPS = 2_000_000
@@ -203,7 +211,9 @@ def plot_comparison(results, filename="comparison.png"):
 
 
 def make_env(utilization_range):
-    return RandomRTOSEnv(utilization_range=utilization_range, max_ticks=300, **REWARD_KWARGS)
+    return RandomRTOSEnv(
+        utilization_range=utilization_range, max_ticks=300, **REWARD_KWARGS
+    )
 
 
 def main():

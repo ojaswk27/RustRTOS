@@ -1,14 +1,14 @@
 {
   "config_id": 31,
-  "miss_penalty": -5.0,
-  "completion_reward": 1.5,
-  "urgency_weight": 0.5,
+  "miss_penalty": -2.0,
+  "completion_reward": 2.0,
+  "urgency_weight": 0.3,
   "tick_cost": -0.01,
-  "context_switch_penalty": 0.0,
-  "normal_misses_mean": 2.0,
+  "context_switch_penalty": -0.02,
+  "normal_misses_mean": 5.0,
   "normal_misses_std": 0.0,
-  "stressed_misses_mean": 6.0,
+  "stressed_misses_mean": 11.0,
   "stressed_misses_std": 0.0,
-  "stressed_reward_mean": 57.55000000000004,
+  "stressed_reward_mean": 42.400000000000006,
   "model_path": "sweep_results/config_31/ppo_rtos.zip"
 }

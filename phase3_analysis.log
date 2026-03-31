@@ -1,0 +1,189 @@
+
+================================================================================
+PHASE 2: DEEP DECISION ANALYSIS - PPO vs RMS
+================================================================================
+
+Loading PPO model...
+
+################################################################################
+# Normal (U≈1.03)
+################################################################################
+
+PPO Performance:
+  Mean reward: 90.74 ± 9.16
+  Mean misses: 0.00 ± 0.00
+
+======================================================================
+ANALYSIS: Normal (U≈1.03)
+======================================================================
+
+Task Selection Frequency:
+
+Task     Period     WCET       Freq %     RMS?    
+--------------------------------------------------
+0        25         4          18.1       YES     
+1        35         6          18.2       NO      
+2        45         7          14.7       NO      
+3        50         8          11.1       NO      
+4        60         10         12.7       NO      
+5        75         12         24.9       NO      
+
+Most-selected task: 5 (Period=75)
+RMS preferred task: 0 (Period=25)
+✗ PPO DIVERGES from RMS on primary choice
+
+################################################################################
+# Stressed (U≈1.15)
+################################################################################
+
+PPO Performance:
+  Mean reward: 98.56 ± 7.42
+  Mean misses: 0.00 ± 0.00
+
+======================================================================
+ANALYSIS: Stressed (U≈1.15)
+======================================================================
+
+Task Selection Frequency:
+
+Task     Period     WCET       Freq %     RMS?    
+--------------------------------------------------
+0        25         4          16.8       YES     
+1        35         6          19.6       NO      
+2        45         8          12.7       NO      
+3        50         9          14.3       NO      
+4        60         11         12.4       NO      
+5        75         14         22.3       NO      
+
+Most-selected task: 5 (Period=75)
+RMS preferred task: 0 (Period=25)
+✗ PPO DIVERGES from RMS on primary choice
+
+################################################################################
+# Extreme U=1.20
+################################################################################
+
+PPO Performance:
+  Mean reward: 96.77 ± 5.01
+  Mean misses: 0.00 ± 0.00
+
+======================================================================
+ANALYSIS: Extreme U=1.20
+======================================================================
+
+Task Selection Frequency:
+
+Task     Period     WCET       Freq %     RMS?    
+--------------------------------------------------
+0        25         5          16.0       YES     
+1        35         6          16.8       NO      
+2        45         9          15.8       NO      
+3        50         10         14.4       NO      
+4        60         11         11.9       NO      
+5        75         14         20.8       NO      
+
+Most-selected task: 5 (Period=75)
+RMS preferred task: 0 (Period=25)
+✗ PPO DIVERGES from RMS on primary choice
+
+################################################################################
+# Extreme U=1.30
+################################################################################
+
+PPO Performance:
+  Mean reward: 101.62 ± 4.83
+  Mean misses: 0.00 ± 0.00
+
+======================================================================
+ANALYSIS: Extreme U=1.30
+======================================================================
+
+Task Selection Frequency:
+
+Task     Period     WCET       Freq %     RMS?    
+--------------------------------------------------
+0        25         5          20.1       YES     
+1        35         7          18.7       NO      
+2        45         9          12.1       NO      
+3        50         10         14.3       NO      
+4        60         13         16.4       NO      
+5        75         16         18.2       NO      
+
+Most-selected task: 0 (Period=25)
+RMS preferred task: 0 (Period=25)
+✓ PPO ALIGNS with RMS on primary choice
+
+################################################################################
+# Extreme U=1.40
+################################################################################
+
+PPO Performance:
+  Mean reward: 103.15 ± 1.81
+  Mean misses: 0.00 ± 0.00
+
+======================================================================
+ANALYSIS: Extreme U=1.40
+======================================================================
+
+Task Selection Frequency:
+
+Task     Period     WCET       Freq %     RMS?    
+--------------------------------------------------
+0        25         5          17.3       YES     
+1        35         8          19.7       NO      
+2        45         10         15.9       NO      
+3        50         11         15.3       NO      
+4        60         13         15.6       NO      
+5        75         17         16.0       NO      
+
+Most-selected task: 1 (Period=35)
+RMS preferred task: 0 (Period=25)
+✗ PPO DIVERGES from RMS on primary choice
+
+################################################################################
+# Extreme U=1.50
+################################################################################
+
+PPO Performance:
+  Mean reward: 95.76 ± 13.00
+  Mean misses: 0.00 ± 0.00
+
+======================================================================
+ANALYSIS: Extreme U=1.50
+======================================================================
+
+Task Selection Frequency:
+
+Task     Period     WCET       Freq %     RMS?    
+--------------------------------------------------
+0        25         6          19.7       YES     
+1        35         8          19.7       NO      
+2        45         11         15.9       NO      
+3        50         12         13.3       NO      
+4        60         15         18.8       NO      
+5        75         18         12.7       NO      
+
+Most-selected task: 0 (Period=25)
+RMS preferred task: 0 (Period=25)
+✓ PPO ALIGNS with RMS on primary choice
+Traceback (most recent call last):
+  File "/Volumes/Spare/PycharmProjects/OS project/RustRTOS/analyze_decisions.py", line 305, in <module>
+    main()
+  File "/Volumes/Spare/PycharmProjects/OS project/RustRTOS/analyze_decisions.py", line 249, in main
+    visualize_decisions(results, "decision_analysis_comparison.png")
+  File "/Volumes/Spare/PycharmProjects/OS project/RustRTOS/analyze_decisions.py", line 162, in visualize_decisions
+    bars = ax.bar(
+           ^^^^^^^
+  File "/Volumes/Spare/PycharmProjects/OS project/RustRTOS/.venv/lib/python3.11/site-packages/matplotlib/__init__.py", line 1524, in inner
+    return func(
+           ^^^^^
+  File "/Volumes/Spare/PycharmProjects/OS project/RustRTOS/.venv/lib/python3.11/site-packages/matplotlib/axes/_axes.py", line 2583, in bar
+    x, height, width, y, linewidth, hatch = np.broadcast_arrays(
+                                            ^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/Spare/PycharmProjects/OS project/RustRTOS/.venv/lib/python3.11/site-packages/numpy/lib/_stride_tricks_impl.py", line 577, in broadcast_arrays
+    shape = _broadcast_shape(*args)
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/Spare/PycharmProjects/OS project/RustRTOS/.venv/lib/python3.11/site-packages/numpy/lib/_stride_tricks_impl.py", line 452, in _broadcast_shape
+    b = np.broadcast(*args[:64])
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: shape mismatch: objects cannot be broadcast to a single shape.  Mismatch is between arg 0 with shape (6,) and arg 1 with shape (7,).
