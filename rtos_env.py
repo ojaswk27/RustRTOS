@@ -38,6 +38,33 @@ STRESSED_TASKSET = [
     (100, 100, 12),
 ]
 
+# Hard tasksets — high enough U that variable exec still forces misses
+# U_nom=1.57, U_avg~1.17 with variable exec
+HARD_TASKSET = [
+    (10, 10, 4),
+    (15, 15, 5),
+    (20, 20, 5),
+    (30, 30, 7),
+    (50, 50, 10),
+    (100, 100, 15),
+]
+
+# U_nom=1.87, U_avg~1.40 with variable exec
+VERY_HARD_TASKSET = [
+    (10, 10, 5),
+    (15, 15, 6),
+    (20, 20, 7),
+    (30, 30, 8),
+    (50, 50, 12),
+    (100, 100, 20),
+]
+
+# Mixed-criticality: T0-T2 are CRITICAL (high-freq sensors/control),
+# T3-T5 are SOFT (logging, telemetry, housekeeping).
+# Default criticality weights per task index.
+DEFAULT_CRITICALITY = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # uniform (no mixed crit)
+MIXED_CRITICALITY = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]    # T0-T2 critical, T3-T5 soft
+
 # Periods used when randomly generating tasksets
 CANDIDATE_PERIODS = [5, 10, 15, 20, 25, 30, 50, 100]
 
@@ -56,6 +83,7 @@ class TaskSim:
         "remaining",
         "next_release",
         "abs_deadline",
+        "release_tick",
         "ready",
         "last_scheduled",
     )
@@ -67,6 +95,7 @@ class TaskSim:
         self.remaining = 0
         self.next_release = 0
         self.abs_deadline = 0
+        self.release_tick = 0
         self.ready = False
         self.last_scheduled = -1
 
@@ -84,6 +113,9 @@ class RTOSEnv(gym.Env):
         context_switch_penalty: float = -0.05,
         urgency_weight: float = 0.1,
         variable_exec: bool = False,
+        starvation_weight: float = 0.0,
+        jitter_weight: float = 0.0,
+        criticality=None,
     ):
         super().__init__()
         self.taskset_cfg = taskset or NORMAL_TASKSET
@@ -111,12 +143,20 @@ class RTOSEnv(gym.Env):
         self.context_switch_penalty = context_switch_penalty
         self.urgency_weight = urgency_weight
         self.variable_exec = variable_exec
+        self.starvation_weight = starvation_weight
+        self.jitter_weight = jitter_weight
+        self.criticality = criticality or DEFAULT_CRITICALITY
 
         self.tasks = []
         self.tick = 0
         self.last_action = IDLE_ACTION
         self.deadline_misses = 0
         self.completions = 0
+        self._starvation_total = 0.0
+        self._jitter_total = 0.0
+        self.context_switch_count = 0
+        self._critical_misses = 0
+        self._soft_misses = 0
 
     def _build_obs(self) -> np.ndarray:
         obs = np.zeros(MAX_TASKS * FEATURES_PER_TASK, dtype=np.float32)
@@ -143,7 +183,8 @@ class RTOSEnv(gym.Env):
                     if t.last_scheduled >= 0
                     else self.max_period
                 )
-                obs[base + 1] = np.clip(since / self.max_period, 0.0, 1.0)
+                # Normalize by own period so fast tasks show starvation correctly
+                obs[base + 1] = np.clip(since / t.period, 0.0, 1.0)
                 obs[base + 2] = t.remaining / t.wcet if t.wcet > 0 else 0.0
                 obs[base + 3] = urgency_rank[i]
             # else: all zeros (not ready)
@@ -155,6 +196,11 @@ class RTOSEnv(gym.Env):
         self.last_action = IDLE_ACTION
         self.deadline_misses = 0
         self.completions = 0
+        self._starvation_total = 0.0
+        self._jitter_total = 0.0
+        self.context_switch_count = 0
+        self._critical_misses = 0
+        self._soft_misses = 0
         self.tasks = [TaskSim(p, d, w) for p, d, w in self.taskset_cfg]
         for t in self.tasks:
             t.next_release = 0
@@ -166,24 +212,25 @@ class RTOSEnv(gym.Env):
         for t in self.tasks:
             if self.tick >= t.next_release:
                 if self.variable_exec:
-                    # Sample actual execution time from [bcet, wcet]
                     bcet = max(1, t.wcet // 2)
                     t.remaining = int(self.np_random.integers(bcet, t.wcet + 1))
                 else:
                     t.remaining = t.wcet
                 t.abs_deadline = self.tick + t.deadline
+                t.release_tick = self.tick
                 t.ready = True
                 t.next_release = self.tick + t.period
 
-    def _check_deadlines(self) -> int:
-        """Check for deadline misses. Must run BEFORE _do_releases."""
-        misses = 0
-        for t in self.tasks:
+    def _check_deadlines(self) -> list:
+        """Check for deadline misses. Must run BEFORE _do_releases.
+        Returns list of task indices that missed."""
+        missed_indices = []
+        for i, t in enumerate(self.tasks):
             if t.ready and self.tick >= t.abs_deadline:
-                misses += 1
+                missed_indices.append(i)
                 t.ready = False
                 t.remaining = 0
-        return misses
+        return missed_indices
 
     def step(self, action: int):
         reward = self.tick_cost
@@ -195,19 +242,21 @@ class RTOSEnv(gym.Env):
             if t.ready and t.remaining > 0:
                 t.remaining -= 1
                 t.last_scheduled = self.tick
+
                 if self.urgency_weight != 0.0 and t.deadline > 0:
                     # Bonus scales from 0 (just released) to 1 (at the deadline)
                     urgency = 1.0 - (t.abs_deadline - self.tick) / t.deadline
                     reward += self.urgency_weight * max(0.0, urgency)
+
+                if self.jitter_weight != 0.0:
+                    response_time = self.tick - t.release_tick
+                    reward += self.jitter_weight * (-response_time / t.deadline)
+                    self._jitter_total += response_time / t.deadline
+
                 if t.remaining == 0:
                     t.ready = False
                     completions = 1
-                    reward += self.completion_reward
-
-            # WCET-based penalty: penalize selection of heavy tasks
-            # This encourages selection of light tasks (typically short-period tasks)
-            wcet_penalty = 0.1 * (t.wcet / self.max_wcet)
-            reward -= wcet_penalty
+                    reward += self.completion_reward * self.criticality[action]
 
         # Context switch penalty (task-to-task only)
         if (
@@ -216,18 +265,34 @@ class RTOSEnv(gym.Env):
             and self.last_action != IDLE_ACTION
         ):
             reward += self.context_switch_penalty
+            self.context_switch_count += 1
         self.last_action = action
 
         self.tick += 1
 
+        # Starvation: sum of normalised wait time across all ready tasks.
+        # Always computed unconditionally so eval metrics are valid for all schedulers.
+        starvation = sum(
+            (self.tick - t.last_scheduled if t.last_scheduled >= 0 else self.tick) / t.period
+            for t in self.tasks if t.ready
+        )
+        self._starvation_total += starvation
+        if self.starvation_weight != 0.0:
+            reward += self.starvation_weight * (-starvation)
+
         # 1. Check deadlines (before releases — catches misses at period boundaries)
-        misses = self._check_deadlines()
-        reward += self.miss_penalty * misses
+        missed_indices = self._check_deadlines()
+        for idx in missed_indices:
+            reward += self.miss_penalty * self.criticality[idx]
+            if self.criticality[idx] > 1.0:
+                self._critical_misses += 1
+            else:
+                self._soft_misses += 1
 
         # 2. Release new jobs
         self._do_releases()
 
-        self.deadline_misses += misses
+        self.deadline_misses += len(missed_indices)
         self.completions += completions
 
         obs = self._build_obs()
@@ -240,6 +305,11 @@ class RTOSEnv(gym.Env):
             {
                 "misses": self.deadline_misses,
                 "completions": self.completions,
+                "context_switches": self.context_switch_count,
+                "starvation_total": self._starvation_total,
+                "jitter_total": self._jitter_total,
+                "critical_misses": self._critical_misses,
+                "soft_misses": self._soft_misses,
             },
         )
 
@@ -258,11 +328,9 @@ class RandomRTOSEnv(RTOSEnv):
         self.utilization_range = utilization_range
 
     def reset(self, seed=None, options=None):
-        # Sample taskset using a temporary RNG (np_random not yet initialized)
         tmp_rng = np.random.default_rng(seed)
         taskset = self._sample_taskset(tmp_rng)
 
-        # Update taskset-dependent attributes before calling super().reset()
         self.taskset_cfg = taskset
         self.n_tasks = len(taskset)
         self.max_deadline = max(d for _, d, _ in taskset)
@@ -275,11 +343,10 @@ class RandomRTOSEnv(RTOSEnv):
         """Sample a random valid taskset with utilization in self.utilization_range."""
         target_u = float(rng.uniform(*self.utilization_range))
 
-        for _ in range(200):  # retry until we get a valid taskset
+        for _ in range(200):
             periods = sorted(
                 rng.choice(CANDIDATE_PERIODS, size=MAX_TASKS, replace=False)
             )
-            # Sample per-task utilization shares and scale to target
             shares = rng.uniform(0.05, 0.35, size=MAX_TASKS).astype(float)
             shares = shares / shares.sum() * target_u
 
@@ -287,7 +354,7 @@ class RandomRTOSEnv(RTOSEnv):
             valid = True
             for p, u in zip(periods, shares):
                 w = max(1, round(float(p) * float(u)))
-                if w >= p:  # wcet must be strictly less than period
+                if w >= p:
                     valid = False
                     break
                 tasks.append((int(p), int(p), int(w)))
@@ -295,4 +362,4 @@ class RandomRTOSEnv(RTOSEnv):
             if valid:
                 return tasks
 
-        return list(NORMAL_TASKSET)  # fallback — should rarely trigger
+        return list(NORMAL_TASKSET)

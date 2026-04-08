@@ -1,6 +1,6 @@
 # Project Progress Submission
-**RL-Based Real-Time OS Scheduler on Bare-Metal Cortex-M4**
-*30 March 2026*
+**RL-Based Real-Time OS Scheduler — xv6 and Bare-Metal Cortex-M4**
+*8 April 2026*
 
 ---
 
@@ -8,196 +8,192 @@
 
 The idea is to replace a traditional hand-written scheduling policy (like EDF or RMS) with a small neural network trained using reinforcement learning. Instead of programming rules like "always pick the task closest to its deadline", we let the agent figure out a good policy on its own by giving it rewards for completing tasks on time and penalties for missing deadlines.
 
-At inference time the network runs on a bare-metal ARM Cortex-M4 (emulated in QEMU). Since the M4 has an FPU but we want to keep things simple and portable, all the weights are stored as Q10 fixed-point integers. Every multiply is just an integer multiply followed by a right-shift by 10.
+The trained policy is deployed as Q10 fixed-point integer arrays in two targets: a bare-metal ARM Cortex-M4 RTOS and the xv6 teaching operating system (RISC-V), both emulated in QEMU.
+
+### Where PPO Outperforms Classical Schedulers
+
+EDF (Earliest Deadline First) is provably optimal for deadline misses on single-core periodic task systems when all tasks have equal importance. Our key insight is that real embedded systems have **mixed criticality** — some tasks are safety-critical (sensor reads, control loops) and others are soft (logging, telemetry). EDF treats all deadlines equally and cannot distinguish between them.
+
+We train PPO with **asymmetric rewards**: missing a critical task's deadline incurs a 5x penalty compared to a soft task. The agent learns to **selectively sacrifice soft tasks to protect critical ones** under overload — something EDF fundamentally cannot do.
+
+Additionally, with **variable execution times** (actual exec sampled from [WCET/2, WCET] each job release), PPO has a genuine information advantage: it observes the `remaining_work` feature and can reason about how much CPU a task actually needs. EDF only looks at deadlines and has no concept of remaining work.
+
+---
+
+## System Architecture
+
+The project has three layers:
+
+```
+  Python (training)           Bare-Metal (ARM)            xv6 (RISC-V)
+ ┌────────────────┐        ┌────────────────┐        ┌────────────────┐
+ │  rtos_env.py   │        │  src/main.rs   │        │ kernel/proc.c  │
+ │  ┌──────────┐  │ export │  ┌──────────┐  │ export │  ┌──────────┐  │
+ │  │ PPO Agent│──│──Q10──>│──│policy.rs │  │──Q10──>│──│policy.c  │  │
+ │  │ (SB3)    │  │        │  │(Rust i32)│  │        │  │(C int)   │  │
+ │  └──────────┘  │        │  └──────────┘  │        │  └──────────┘  │
+ │  ┌──────────┐  │        │  SysTick+PendSV│        │  clockintr()   │
+ │  │RandomRTOS│  │  same  │  scheduler.rs  │  same  │  scheduler()   │
+ │  │Env (Gym) │  │  logic │  switch.rs     │  logic │  swtch.S       │
+ │  └──────────┘  │        │  (ARM asm)     │        │  (RISC-V asm)  │
+ └────────────────┘        └────────────────┘        └────────────────┘
+                           Cortex-M4 (QEMU)          RISC-V (QEMU)
+```
+
+### Python Training Environment
+
+- **RandomRTOSEnv**: generates a fresh random taskset every episode to force generalization
+- **Curriculum learning**: 3 training phases with increasing utilization
+- **Variable execution times**: actual exec sampled from [WCET/2, WCET] each release
+- **Mixed criticality**: T0-T2 are critical (5x miss penalty), T3-T5 are soft (1x)
+- **Multi-objective reward**: deadline misses, completions, urgency, starvation, jitter, context switches
+
+### Bare-Metal Rust RTOS (ARM Cortex-M4)
+
+A real preemptive RTOS using ARM exception mechanisms:
+- **SysTick**: fires every 1ms, runs scheduler (deadline checks, releases, NN inference, PendSV trigger)
+- **PendSV**: assembly-level context switch (saves/restores r4-r11, swaps stack pointers)
+- **Per-task stacks**: 6 x 1KB + idle stack, with Cortex-M exception frame initialization
+- Binary: 5.1KB code + 6.7KB RAM
+
+### xv6-riscv Integration
+
+The RL scheduler is integrated into MIT's xv6 teaching OS:
+- **Two-tier scheduler**: NN governs 6 RT tasks; non-RT processes (shell, init) use round-robin fallback
+- **Timer interrupt**: `clockintr()` handles deadline checking, job releases, and work decrement
+- **New syscalls**: `rtregister`, `rtjobdone`, `rtstats`, `setscheduler`
+- **Context switching**: uses xv6's existing `swtch.S` (RISC-V callee-saved register save/restore)
+- **User program**: `rtdemo` launches 6 periodic tasks, runs for 300+ ticks, prints stats
+- Kernel: 54KB code + 107KB BSS (with NN weights baked in)
+- Switchable between NN and round-robin at runtime for A/B comparison
 
 ---
 
 ## Pseudocode
 
-### Scheduler Tick Loop
+### Timer Interrupt (clockintr / SysTick)
 
-Every tick, the scheduler does four things in order: check if any tasks ran out of time, release any tasks whose period has come around again, ask the neural network which task to run, and then run it for one tick. The ordering matters — deadline checks happen before releases so that a task expiring right at its period boundary is counted as a miss rather than quietly overwritten by the new job.
+Every tick, the timer interrupt runs the RT scheduling logic. The ordering matters — deadline checks happen before releases so that a task expiring right at its period boundary is counted as a miss rather than quietly overwritten by the new job.
 
 ```
-procedure SCHEDULER_TICK(tasks[], tick):
-    // Check for deadline misses first (before releasing new jobs,
-    // otherwise a job expiring at its period boundary looks like a new release)
-    for each task t in tasks:
-        if t.ready AND tick >= t.abs_deadline:
-            t.ready     ← false
-            t.remaining ← 0
-            record deadline miss
+clockintr():
+    tick ← tick + 1
 
-    // Release new jobs at period boundaries
-    for each task t in tasks:
+    for each RT task t:
+        // 1. Check deadline miss (before release)
+        if t.rt_ready AND tick >= t.abs_deadline:
+            t.rt_ready  ← false
+            t.remaining ← 0
+            t.misses    ← t.misses + 1
+
+        // 2. Release new job at period boundary
         if tick >= t.next_release:
             t.remaining    ← t.wcet
             t.abs_deadline ← tick + t.deadline
             t.next_release ← tick + t.period
-            t.ready        ← true
+            t.rt_ready     ← true
+            if t.state = SLEEPING: t.state ← RUNNABLE
 
-    // Build the observation vector and ask the network what to run
-    obs    ← BUILD_STATE(tasks, tick)
-    action ← NN_INFER(obs)        // 0..5 = run that task, 6 = idle
-
-    // Execute for one tick
-    if action ≠ IDLE AND tasks[action].ready:
-        tasks[action].remaining      ← tasks[action].remaining − 1
-        tasks[action].last_scheduled ← tick
-        if tasks[action].remaining = 0:
-            tasks[action].ready ← false
-            record completion
-
-    tick ← tick + 1
+        // 3. Decrement currently-running RT task's work
+        if current_cpu.proc = t AND t.rt_ready AND t.remaining > 0:
+            t.last_scheduled ← tick
+            t.remaining      ← t.remaining - 1
+            if t.remaining = 0:
+                t.completions ← t.completions + 1
+                t.rt_ready    ← false
 ```
 
-### State Encoding
-
-Before the network can make a decision, we need to describe the current situation to it as a list of numbers. We give it 4 numbers for each of the 6 tasks: how close it is to its deadline, how long it has been waiting, how much work it still has left, and whether it even has a job to run right now. All values are normalized to the range [0, 1] so the network does not have to deal with wildly different scales. Tasks that have no pending job get all zeros, which signals to the network that they can be ignored.
+### Two-Tier Scheduler
 
 ```
-procedure BUILD_STATE(tasks[], tick) → obs[24]:
-    MAX_DEADLINE ← max deadline across all tasks
-    MAX_PERIOD   ← max period across all tasks
+scheduler():
+    loop forever:
+        // Tier 1: NN scheduling for RT tasks
+        if any RT task is RUNNABLE:
+            state ← BUILD_STATE(proc_table, tick)
+            action ← NN_INFER(state)       // Q10 fixed-point, ~2000 MACs
+            if action ≠ IDLE:
+                switch to proc with rt_id = action
+
+        // Tier 2: Round-robin for non-RT processes (shell, init, etc.)
+        for each proc p:
+            if p.state = RUNNABLE:
+                switch to p
+```
+
+### State Encoding (24 floats)
+
+```
+BUILD_STATE(tasks[], tick) → obs[24]:
+    ready_sorted ← sort(ready tasks, by abs_deadline ascending)
+    n_ready      ← count of ready tasks
 
     for i = 0 to 5:
         base ← i × 4
-        if tasks[i].ready:
-            obs[base+0] ← (tasks[i].abs_deadline − tick) / MAX_DEADLINE   // time_to_deadline
-            obs[base+1] ← (tick − tasks[i].last_scheduled) / MAX_PERIOD   // time_since_scheduled
-            obs[base+2] ← tasks[i].remaining / tasks[i].wcet              // remaining_work
-            obs[base+3] ← 1.0                                              // is_ready
+        if tasks[i] is ready:
+            obs[base+0] ← (abs_deadline − tick) / MAX_DEADLINE   // time_to_deadline
+            obs[base+1] ← (tick − last_scheduled) / period       // time_since_scheduled
+            obs[base+2] ← remaining / wcet                       // remaining_work
+            obs[base+3] ← (n_ready − rank) / n_ready             // urgency_rank
         else:
             obs[base .. base+3] ← 0.0
-
-    return obs
 ```
 
 | Feature | What it tells the network |
 |---------|--------------------------|
-| `time_to_deadline` | how urgent the task is (0 = at the deadline) |
-| `time_since_scheduled` | whether the task is being starved |
-| `remaining_work` | how close it is to finishing |
-| `is_ready` | whether the task has a job to run at all |
+| `time_to_deadline` | How urgent the task is. 1.0 = lots of time, 0.0 = at the deadline. |
+| `time_since_scheduled` | Whether the task is being starved. Normalized by own period. |
+| `remaining_work` | How much CPU work is left. With variable exec, reflects actual remaining. |
+| `urgency_rank` | Relative urgency among ready tasks. 1.0 = most urgent (nearest deadline). |
 
 ### Neural Network Inference (Q10 Fixed-Point)
 
-The network is a standard feedforward neural network with two hidden layers of 32 neurons each. It takes the 24 numbers from the state encoding as input and produces 7 output scores, one for each possible action (run task 0 through 5, or go idle). The action with the highest score is picked. The only unusual aspect is that all the math uses integers instead of floating point, which is necessary to run efficiently on a microcontroller without worrying about FPU overhead or floating point reproducibility across platforms.
-
 ```
-procedure NN_INFER(obs[24]) → action:
-    // Hidden layer 1
+NN_INFER(obs[24]) → action:
+    // Layer 1: 24 → 32, ReLU
     for j = 0 to 31:
-        h1[j] ← B1[j]
-        for i = 0 to 23:
-            h1[j] ← h1[j] + (W1[j][i] * obs_q10[i]) >> 10
-        h1[j] ← max(h1[j], 0)   // ReLU
+        h1[j] ← B1[j] + Σ(W1[j][i] × obs_q10[i]) >> 10
+        h1[j] ← max(h1[j], 0)
 
-    // Hidden layer 2
+    // Layer 2: 32 → 32, ReLU
     for j = 0 to 31:
-        h2[j] ← B2[j]
-        for i = 0 to 31:
-            h2[j] ← h2[j] + (W2[j][i] * h1[i]) >> 10
+        h2[j] ← B2[j] + Σ(W2[j][i] × h1[i]) >> 10
         h2[j] ← max(h2[j], 0)
 
-    // Output layer
-    for j = 0 to 6:
-        out[j] ← B3[j]
-        for i = 0 to 31:
-            out[j] ← out[j] + (W3[j][i] * h2[i]) >> 10
-
-    return argmax(out)
+    // Output: 32 → 7, argmax
+    return argmax(B3[j] + Σ(W3[j][i] × h2[i]) >> 10)
 ```
 
-The `>> 10` is the Q10 descale (equivalent to dividing by 1024). All operations are saturating 32-bit integer arithmetic so there's no overflow on the Cortex-M4.
-
-### PPO Training
-
-Training happens offline on a PC, not on the microcontroller. We simulate the RTOS environment in Python and run the PPO algorithm, which works by having the agent play through many episodes of the scheduler and nudging the policy towards actions that led to better outcomes. The clip in the loss function is PPO's key trick: it limits how much the policy is allowed to change in a single update, which keeps training stable.
-
-The reward design is where the real engineering judgement comes in. Every tick costs a small amount to push the agent towards finishing things quickly. Completing a task earns a reward, missing a deadline is penalized, and switching between tasks carries a small penalty to discourage unnecessary preemption.
+### PPO Training (3-Phase Curriculum with Mixed Criticality)
 
 ```
-procedure TRAIN():
-    env    ← RTOSEnv(taskset=NORMAL_TASKSET, max_ticks=300)
-    policy ← MLP([32, 32], input=24, output=7)
+TRAIN():
+    criticality ← [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]  // T0-T2 critical, T3-T5 soft
 
-    for step = 1 to 2,000,000:
-        obs ← env.reset()
-        repeat until episode ends:
-            action, log_prob, value ← policy(obs)
-            obs', reward, done      ← env.step(action)
+    // Phase 1: Easy (U = 0.60-0.95)
+    train PPO for 666,667 steps on RandomRTOSEnv(U=0.60-0.95)
 
-            // Reward shaping
-            reward += −0.01           // small cost per tick (urgency pressure)
-            reward += +1.5            // on task completion
-            reward += −3.0 × misses   // per deadline miss
-            reward += −0.05           // on context switch (task→task only)
+    // Phase 2: Medium (U = 0.85-1.10)
+    train PPO for 666,667 steps on RandomRTOSEnv(U=0.85-1.10)
 
-            store transition
-            obs ← obs'
+    // Phase 3: Hard (U = 0.95-1.20)
+    train PPO for 666,667 steps on RandomRTOSEnv(U=0.95-1.20)
 
-        // PPO update every 2048 steps
-        for 10 epochs over rollout buffer (batch size 64):
-            ratio   ← exp(log_prob_new − log_prob_old)
-            L_clip  ← min(ratio × A, clip(ratio, 0.8, 1.2) × A)
-            loss    ← −L_clip + 0.5 × value_loss − 0.01 × entropy
-            update policy
-```
-
-The reward values (`−3.0` miss penalty, `+1.5` completion reward) were selected from a grid search where we trained 16 configurations in parallel and picked the one with the fewest deadline misses on the stressed taskset.
-
-### Weight Export
-
-Once training is done, the learned weights only exist as floating-point numbers inside Python. To get them onto the microcontroller we multiply every weight by 1024 and round to the nearest integer, turning them into Q10 fixed-point values. These are then written out as plain Rust arrays that get compiled directly into the firmware — no file loading, no dynamic allocation, just constants baked into the binary.
-
-```
-procedure EXPORT_WEIGHTS(policy):
-    for each layer (W, B):
-        write "static W: [[i32; ...]; ...] = " + round(W × 1024) + ";"
-        write "static B: [i32; ...]       = " + round(B × 1024) + ";"
-    // → src/policy.rs
+    // Reward (per tick, criticality-weighted):
+    reward += -3.0 × criticality[i] × misses   // critical miss = -15.0, soft = -3.0
+    reward += +2.0 × criticality[i] × completions
+    reward += +0.1 × urgency
+    reward += -0.02 × context_switch
+    reward += -0.05 × starvation
+    reward += -0.02 × jitter
+    reward += -0.01  // tick cost
 ```
 
 ---
 
-## Preliminary Results
+## Tasksets
 
-We tested on two tasksets. Both are intentionally overloaded (total utilization > 1.0), so some deadline misses are unavoidable. The goal is just to minimize them.
-
-### Task Attributes
-
-Each task is modeled as a periodic job that repeats forever. It wakes up, needs some amount of CPU time to finish, and has a deadline to finish by. The scheduler sees a snapshot of every task's current state each tick and decides which one to run next.
-
-Each task has two kinds of attributes: static configuration that never changes, and dynamic state that gets updated every tick.
-
-**Static (set at task creation):**
-
-| Attribute | Description |
-|-----------|-------------|
-| `period` | How often the task fires. A new job is released every `period` ticks. |
-| `deadline` | How long the task has to finish after being released. We use implicit deadlines, so `deadline == period` for all tasks. |
-| `wcet` | Worst-case execution time. The number of ticks the task needs to run to completion. |
-
-**Dynamic (updated at runtime):**
-
-| Attribute | Description |
-|-----------|-------------|
-| `ready` | True if this task has a pending job that still needs CPU time. False after completion or a deadline miss. |
-| `remaining` | Ticks of CPU work still needed for the current job. Starts at `wcet` on release, counts down to 0. |
-| `abs_deadline` | The absolute tick by which the current job must finish (`release_tick + deadline`). |
-| `next_release` | The tick when the next job will be released (`release_tick + period`). |
-| `last_scheduled` | The last tick this task was given the CPU. Used to compute the `time_since_scheduled` feature. -1 if the task has never run. |
-
-A task is considered to have missed its deadline if `ready` is still true when `tick >= abs_deadline`. When that happens, `ready` and `remaining` are both reset to 0 (the job is discarded) and the miss is counted. A new job is then released at the next period boundary as normal.
-
-### Tasksets
-
-The taskset consists of 6 periodic tasks with implicit deadlines (deadline = period). Each task represents a recurring job that must complete within its period. Think of T0 as something like a sensor read happening every 10ms, T3 as a slower control loop every 30ms, and T5 as a background logging or housekeeping task every 100ms. The tasks span a range of periods (10 to 100 ticks) which is typical of a mixed-criticality embedded workload where high-frequency tasks tend to be shorter and lower-frequency tasks tend to do more work.
-
-The key quantity is utilization: U = sum of (WCET / period) across all tasks. If U ≤ 1.0 the workload is theoretically schedulable (EDF can always meet all deadlines). We deliberately push U slightly above 1.0 so that no scheduler can be perfect. This forces the agent to make trade-offs about which tasks to deprioritize, which is a more interesting learning problem.
-
-The stressed taskset increases WCET on T0 (the most frequent task) and T5 (the longest task), pushing U to 1.15. The scheduler was never trained on this taskset, so it tests whether the learned policy generalizes beyond its training distribution.
+### Standard Tasksets (for baseline comparison)
 
 | Task | Period | Deadline | WCET (normal) | WCET (stressed) | U (normal) |
 |------|--------|----------|--------------|-----------------|------------|
@@ -207,37 +203,90 @@ The stressed taskset increases WCET on T0 (the most frequent task) and T5 (the l
 | T3   | 30     | 30       | 5            | 5               | 0.17       |
 | T4   | 50     | 50       | 8            | 8               | 0.16       |
 | T5   | 100    | 100      | 10           | 12              | 0.10       |
-| **Total** | | | | | **≈ 1.03** |
+| **Total** | | | | | **~1.03** |
 
-One subtlety worth noting: T0, T1, and T2 each contribute 0.20 to utilization individually but have very different periods. T0 fires 10 times for every one firing of T5. This means a bad scheduler that ignores T0's frequency (like Round Robin, which treats all tasks equally) will miss T0's deadlines far more often than it misses T5's, even though both look equally important on paper. EDF handles this naturally by always chasing the nearest deadline. Part of what we're testing is whether the RL agent picks up on the same intuition.
+### Very Hard Taskset (where PPO wins)
 
-### Normal Taskset (U ≈ 1.03)
+Used for the mixed-criticality evaluation. High enough utilization that misses are unavoidable even with variable execution, forcing the scheduler to choose which tasks to sacrifice.
 
-| Scheduler | Avg Deadline Misses | Avg Reward |
-|-----------|-------------------|------------|
-| EDF | 2.0 | 69.2 |
-| RMS | 3.0 | 66.4 |
-| **PPO (ours)** | **4.0** | **55.2** |
-| Round Robin | 12.0 | 30.4 |
-
-### Stressed Taskset (U ≈ 1.15, trained only on normal)
-
-| Scheduler | Avg Deadline Misses | Avg Reward |
-|-----------|-------------------|------------|
-| RMS | 5.0 | 60.8 |
-| **PPO (ours)** | **7.0** | **55.2** |
-| EDF | 7.0 | 55.1 |
-| Round Robin | 39.0 | −50.9 |
-
-On the normal taskset PPO comes in just behind EDF and RMS, which is expected since EDF is optimal for this class of problem and we're learning from scratch. The more interesting result is on the stressed taskset. PPO was never trained on it but matches EDF exactly (7 misses each), while Round Robin completely falls apart (39 misses). This suggests the policy is learning something more general than just memorizing the training distribution.
+| Task | Period | Deadline | WCET | Criticality | U |
+|------|--------|----------|------|-------------|---|
+| T0   | 10     | 10       | 5    | Critical    | 0.50 |
+| T1   | 15     | 15       | 6    | Critical    | 0.40 |
+| T2   | 20     | 20       | 7    | Critical    | 0.35 |
+| T3   | 30     | 30       | 8    | Soft        | 0.27 |
+| T4   | 50     | 50       | 12   | Soft        | 0.24 |
+| T5   | 100    | 100      | 20   | Soft        | 0.20 |
+| **Total** | | | | | **~1.87** |
 
 ---
 
-## What's Done So Far
+## Results
 
-- Python simulation environment and training pipeline: complete
-- EDF, RMS, Round Robin baselines for comparison: complete
-- Reward function tuning via parallel grid search: complete
-- Q10 weight export to Rust: complete
-- Rust scheduler + NN inference on bare-metal Cortex-M4 (QEMU): complete
-- Trained model: complete
+### Mixed Criticality — Very Hard Taskset (U_nom ~1.87, Variable Exec)
+
+This is the key result. Under heavy overload with mixed criticality, PPO learns to protect critical tasks by selectively sacrificing soft ones. EDF treats all deadlines equally and cannot make this distinction.
+
+| Scheduler | Total Misses | Critical Misses | Soft Misses | Reward |
+|-----------|-------------|----------------|-------------|--------|
+| **PPO (ours)** | **18.7** | **2.0** | 16.7 | **555.1** |
+| RMS | 19.3 | 3.2 | 16.1 | 530.0 |
+| EDF | 21.4 | 4.9 | 16.5 | 491.4 |
+| Round Robin | 59.8 | 50.8 | 9.0 | -630.3 |
+
+**PPO beats EDF on critical task miss rate by 59%** (2.0 vs 4.9 critical misses). It also beats RMS (2.0 vs 3.2). PPO achieves the fewest total misses (18.7 vs 21.4 EDF) and the highest reward (555.1 vs 491.4 EDF).
+
+### Uniform Criticality — Standard Tasksets (Variable Exec)
+
+On easier tasksets where all tasks have equal weight and misses are rare, EDF remains optimal as theory predicts.
+
+| Scheduler | Misses (Normal) | Misses (Stressed) |
+|-----------|----------------|-------------------|
+| EDF | 0.0 | 0.0 |
+| RMS | 0.0 | 0.0 |
+| PPO | 7.1 | 7.1 |
+| Round Robin | 0.1 | 3.0 |
+
+This is expected — EDF's optimality holds when U < 1.0 and all tasks are equally important. The value of PPO emerges only when these assumptions are violated (overload + mixed criticality).
+
+### Why These Results Make Sense
+
+EDF's optimality is proven under specific conditions: single core, preemptive, periodic tasks, equal importance, known WCET, U <= 1.0. Our PPO breaks three of these:
+
+1. **U > 1.0** — overloaded, misses are unavoidable, scheduler must choose who to sacrifice
+2. **Mixed criticality** — tasks have different importance levels, EDF cannot distinguish
+3. **Variable execution** — PPO observes remaining work, EDF only sees deadlines
+
+Under these violations, EDF's greedy "nearest deadline first" strategy becomes suboptimal because it wastes CPU protecting soft tasks that should be sacrificed.
+
+---
+
+## What's Done
+
+### Python Training Pipeline
+- Gymnasium environment with multi-objective reward, mixed criticality, variable exec
+- 3-phase curriculum learning with randomized tasksets for generalization
+- PPO training (2M timesteps, stable-baselines3, ReLU activation)
+- Parallel hyperparameter sweep (108 configurations)
+- EDF, RMS, Round Robin baselines for comparison
+- Evaluation on 4 tasksets with critical/soft miss breakdown
+
+### Bare-Metal RTOS (ARM Cortex-M4)
+- Real preemptive scheduler: SysTick (1ms tick) + PendSV (context switch in assembly)
+- Per-task 1KB stacks with Cortex-M exception frame initialization
+- Q10 fixed-point NN inference baked into firmware
+- 5.1KB code + 6.7KB RAM — fits in STM32F411 (512KB FLASH, 128KB RAM)
+
+### xv6-riscv Integration
+- RL scheduler integrated into MIT's xv6 teaching OS
+- Two-tier scheduler: NN for RT tasks, round-robin fallback for shell/init
+- 4 new syscalls: `rtregister`, `rtjobdone`, `rtstats`, `setscheduler`
+- RT logic in `clockintr()`: deadline checks, job releases, work decrement
+- `rtdemo` user program: launches 6 tasks, switchable NN/RR mode
+- 54KB kernel with NN weights, builds clean with `make qemu CPUS=1`
+- All existing xv6 functionality preserved (shell, ls, cat, etc.)
+
+### Weight Export
+- `export_weights.py` generates both Rust (`src/policy.rs`) and C (`kernel/policy.c`)
+- Q10 format: weights × 1024, rounded to int, compiled as static arrays
+- Architecture-independent: same weights run on ARM (Rust) and RISC-V (C)

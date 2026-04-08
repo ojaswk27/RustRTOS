@@ -30,6 +30,8 @@ MISS_PENALTIES = [-2.0, -3.0, -5.0]
 COMPLETION_REWARDS = [1.0, 1.5, 2.0]
 URGENCY_WEIGHTS = [0.0, 0.1, 0.3, 0.5]
 CONTEXT_SW_PENALTIES = [0.0, -0.02, -0.05]
+STARVATION_WEIGHTS = [0.0, 0.05]
+JITTER_WEIGHTS = [0.0, 0.02]
 
 TICK_COSTS = [-0.01]
 
@@ -40,8 +42,11 @@ RESULTS_DIR = "sweep_results"
 
 def build_grid():
     configs = []
-    for i, (mp, cr, uw, cs, tc) in enumerate(
-        itertools.product(MISS_PENALTIES, COMPLETION_REWARDS, URGENCY_WEIGHTS, CONTEXT_SW_PENALTIES, TICK_COSTS)
+    for i, (mp, cr, uw, cs, sw, jw, tc) in enumerate(
+        itertools.product(
+            MISS_PENALTIES, COMPLETION_REWARDS, URGENCY_WEIGHTS,
+            CONTEXT_SW_PENALTIES, STARVATION_WEIGHTS, JITTER_WEIGHTS, TICK_COSTS,
+        )
     ):
         configs.append({
             "config_id": i,
@@ -50,6 +55,8 @@ def build_grid():
             "urgency_weight": uw,
             "tick_cost": tc,
             "context_switch_penalty": cs,
+            "starvation_weight": sw,
+            "jitter_weight": jw,
         })
     return configs
 
@@ -73,6 +80,8 @@ def train_one(cfg: dict) -> dict:
         urgency_weight=cfg["urgency_weight"],
         tick_cost=cfg["tick_cost"],
         context_switch_penalty=cfg["context_switch_penalty"],
+        starvation_weight=cfg["starvation_weight"],
+        jitter_weight=cfg["jitter_weight"],
     )
     model = PPO(
         "MlpPolicy",
@@ -99,6 +108,8 @@ def train_one(cfg: dict) -> dict:
         "urgency_weight": cfg["urgency_weight"],
         "tick_cost": cfg["tick_cost"],
         "context_switch_penalty": cfg["context_switch_penalty"],
+        "starvation_weight": cfg["starvation_weight"],
+        "jitter_weight": cfg["jitter_weight"],
         "normal_misses_mean": float(normal_misses.mean()),
         "normal_misses_std": float(normal_misses.std()),
         "stressed_misses_mean": float(stressed_misses.mean()),

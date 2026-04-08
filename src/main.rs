@@ -1,48 +1,64 @@
-//! RL-Based Adaptive RTOS Scheduler — bare-metal entry point.
+//! RL-Based Adaptive RTOS Scheduler — bare-metal Cortex-M4.
 //!
-//! Runs on ARM Cortex-M4 (STM32F411) under QEMU. Defines the same 6-task
-//! periodic taskset used in Python training, then runs the scheduler for
-//! one hyperperiod (300 ticks). Output goes via semihosting to the QEMU console.
+//! Real preemptive scheduler running on STM32F411 (QEMU).
+//! SysTick fires every 1ms, the RL policy network decides which
+//! task to run, and PendSV performs the actual context switch.
+//!
+//! Build & run:  cargo run --release
 
-#![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), no_main)]
+#![no_std]
+#![no_main]
+#![allow(static_mut_refs)]
 
 mod policy;
 mod scheduler;
+mod stacks;
+mod switch;
 mod task;
+mod tasks;
 
-#[cfg(not(test))]
+use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::entry;
-#[cfg(not(test))]
-use cortex_m_semihosting::{debug, hprintln};
-#[cfg(not(test))]
+use cortex_m_semihosting::hprintln;
 use panic_halt as _;
 
-#[cfg(not(test))]
 #[entry]
 fn main() -> ! {
     let _ = hprintln!("========================================");
-    let _ = hprintln!("  RL-RTOS Scheduler — Cortex-M4 Demo");
+    let _ = hprintln!("  RL-RTOS Scheduler — Cortex-M4");
+    let _ = hprintln!("  Real preemptive scheduling demo");
     let _ = hprintln!("========================================\n");
 
-    // Same taskset as Python training: (period, deadline, wcet)
-    // Total utilization ≈ 1.03 — intentionally overloaded.
-    let tasks = [
-        task::Task::new(0, 10, 10, 2),
-        task::Task::new(1, 15, 15, 3),
-        task::Task::new(2, 20, 20, 4),
-        task::Task::new(3, 30, 30, 5),
-        task::Task::new(4, 50, 50, 8),
-        task::Task::new(5, 100, 100, 10),
-    ];
+    let mut core = cortex_m::Peripherals::take().unwrap();
 
-    let mut sched = scheduler::Scheduler::new(tasks);
+    // Configure SysTick: 1ms tick at 16MHz (QEMU default)
+    core.SYST.set_clock_source(SystClkSource::Core);
+    core.SYST.set_reload(15_999); // 16000 cycles = 1ms at 16MHz
+    core.SYST.clear_current();
+    core.SYST.enable_counter();
+    core.SYST.enable_interrupt();
 
-    // Run for one hyperperiod: LCM(10,15,20,30,50,100) = 300 ticks
-    sched.run(300);
+    // PendSV must be lowest priority so it runs after SysTick
+    unsafe {
+        core.SCB.set_priority(cortex_m::peripheral::scb::SystemHandler::PendSV, 0xFF);
+    }
 
-    let _ = hprintln!("\nScheduler finished. Halting.");
-    debug::exit(debug::EXIT_SUCCESS);
+    let _ = hprintln!("SysTick configured: 1ms tick");
+    let _ = hprintln!("Initializing {} tasks...", scheduler::NUM_TASKS);
 
-    loop {}
+    // Init task stacks and release all tasks at tick 0
+    scheduler::init();
+
+    let _ = hprintln!("Starting scheduler...\n");
+
+    // Start the scheduler — this triggers the first PendSV and
+    // we never return from here (SysTick drives everything).
+    scheduler::start();
+
+    // Unreachable — scheduler::start() triggers PendSV which
+    // switches to the first task. SysTick handler exits via
+    // semihosting when MAX_TICKS is reached.
+    loop {
+        cortex_m::asm::wfi();
+    }
 }

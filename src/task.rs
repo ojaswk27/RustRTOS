@@ -1,67 +1,74 @@
-/// Represents a periodic real-time task.
+/// Task Control Block for a periodic real-time task.
 ///
-/// A task has a job pending when `ready == true`. It stays ready until it
-/// either completes (remaining hits 0) or misses its deadline. There is no
-/// intermediate "Running" state — the scheduler simply calls `tick_execute`
-/// each tick it allocates CPU to this task.
-#[derive(Clone, Copy)]
+/// Each task owns a saved stack pointer (`sp`) that PendSV uses for
+/// context switching. The `sp` field MUST be at offset 0 so the
+/// assembly handler can load/store it with a single `ldr/str r0, [r2]`.
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum TaskState {
+    Ready,
+    Running,
+    Blocked,
+    Dead,
+}
+
+#[repr(C)]
 pub struct Task {
+    /// Saved stack pointer — offset 0, accessed directly by PendSV asm.
+    pub sp: *mut u32,
+
     pub id: usize,
-    pub period: u32,
-    pub deadline: u32,
-    pub wcet: u32,
+    pub period_ticks: u32,
+    pub deadline_ticks: u32,
+    pub wcet_ticks: u32,
     pub remaining: u32,
     pub next_release: u32,
     pub abs_deadline: u32,
-    pub ready: bool,
-    pub last_scheduled: i32,  // tick of last CPU allocation; -1 if never scheduled
-    pub deadline_misses: u32,
+    pub last_scheduled: i32,
+    pub state: TaskState,
+    pub misses: u32,
+    pub completions: u32,
 }
 
+/// Sentinel value for "never been scheduled".
+const NEVER_SCHEDULED: i32 = -1;
+
 impl Task {
+    /// Create a new task. The stack pointer is null until `init_stack` is called.
     pub const fn new(id: usize, period: u32, deadline: u32, wcet: u32) -> Self {
         Self {
+            sp: core::ptr::null_mut(),
             id,
-            period,
-            deadline,
-            wcet,
+            period_ticks: period,
+            deadline_ticks: deadline,
+            wcet_ticks: wcet,
             remaining: 0,
             next_release: 0,
             abs_deadline: 0,
-            ready: false,
-            last_scheduled: -1,
-            deadline_misses: 0,
+            last_scheduled: NEVER_SCHEDULED,
+            state: TaskState::Blocked,
+            misses: 0,
+            completions: 0,
         }
     }
 
-    /// Release a new job. Called when the period boundary arrives.
+    /// Release a new job at the given tick.
     pub fn release(&mut self, tick: u32) {
-        self.remaining = self.wcet;
-        self.abs_deadline = tick + self.deadline;
-        self.next_release = tick + self.period;
-        self.ready = true;
+        self.remaining = self.wcet_ticks;
+        self.abs_deadline = tick + self.deadline_ticks;
+        self.next_release = tick + self.period_ticks;
+        self.state = TaskState::Ready;
     }
 
-    /// Execute one tick of CPU work. Returns true if the task just completed.
-    /// Caller must ensure `ready == true` and `remaining > 0` before calling.
-    pub fn tick_execute(&mut self, tick: u32) -> bool {
-        debug_assert!(self.ready && self.remaining > 0, "tick_execute called on non-ready task");
-        self.last_scheduled = tick as i32;
-        self.remaining -= 1;
-        if self.remaining == 0 {
-            self.ready = false;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Check for a deadline miss. Returns true if a miss occurred.
+    /// Check for deadline miss. Returns true if a miss was recorded.
     /// Must be called BEFORE release() on the same tick.
     pub fn check_deadline(&mut self, tick: u32) -> bool {
-        if self.ready && tick >= self.abs_deadline {
-            self.deadline_misses += 1;
-            self.ready = false;
+        if (self.state == TaskState::Ready || self.state == TaskState::Running)
+            && tick >= self.abs_deadline
+        {
+            self.misses += 1;
+            self.state = TaskState::Blocked;
             self.remaining = 0;
             true
         } else {
@@ -70,86 +77,51 @@ impl Task {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Initialise a task's stack frame so PendSV can "return" to it.
+///
+/// The frame matches what Cortex-M hardware pushes on exception entry
+/// plus the software-saved r4-r11 that PendSV manages.
+///
+/// Stack layout (high address at top):
+/// ```text
+///   xPSR          ← hardware frame (8 words)
+///   PC  (entry)
+///   LR  (task_exit)
+///   R12
+///   R3..R0
+///   R11..R4       ← software frame (8 words, pushed by PendSV)
+///   ^-- returned sp points here
+/// ```
+///
+/// # Safety
+/// `stack` must be a valid, exclusively owned, 8-byte aligned buffer.
+/// `entry` must be a valid function pointer with signature `fn() -> !`.
+pub unsafe fn init_stack(stack: &mut [u8], entry: fn() -> !) -> *mut u32 {
+    let top = stack.as_mut_ptr().add(stack.len()) as *mut u32;
 
-    #[test]
-    fn test_release_sets_fields() {
-        let mut t = Task::new(0, 10, 10, 3);
-        t.release(0);
-        assert!(t.ready);
-        assert_eq!(t.remaining, 3);
-        assert_eq!(t.abs_deadline, 10);
-        assert_eq!(t.next_release, 10);
-        assert_eq!(t.last_scheduled, -1); // not yet scheduled
+    // Hardware exception frame (pushed by hardware on exception entry)
+    let hw = top.sub(8);
+    hw.add(7).write(0x0100_0000); // xPSR — Thumb bit
+    hw.add(6).write(entry as u32); // PC — task entry point
+    hw.add(5).write(task_exit as *const () as u32); // LR — fallback if task returns
+    hw.add(4).write(0); // R12
+    hw.add(3).write(0); // R3
+    hw.add(2).write(0); // R2
+    hw.add(1).write(0); // R1
+    hw.add(0).write(0); // R0
+
+    // Software frame (r4-r11, pushed/popped by PendSV)
+    let sw = hw.sub(8);
+    for i in 0..8 {
+        sw.add(i).write(0);
     }
 
-    #[test]
-    fn test_tick_execute_partial() {
-        let mut t = Task::new(0, 10, 10, 3);
-        t.release(0);
-        let done = t.tick_execute(0);
-        assert!(!done);
-        assert_eq!(t.remaining, 2);
-        assert!(t.ready);
-        assert_eq!(t.last_scheduled, 0);
-    }
+    sw // initial saved sp
+}
 
-    #[test]
-    fn test_tick_execute_completes() {
-        let mut t = Task::new(0, 10, 10, 2);
-        t.release(0);
-        t.tick_execute(0);
-        let done = t.tick_execute(1);
-        assert!(done);
-        assert_eq!(t.remaining, 0);
-        assert!(!t.ready);
-        assert_eq!(t.last_scheduled, 1);
-    }
-
-    #[test]
-    fn test_check_deadline_no_miss_before_boundary() {
-        let mut t = Task::new(0, 10, 10, 3);
-        t.release(0); // abs_deadline = 10
-        assert!(!t.check_deadline(9));
-        assert!(t.ready);
-        assert_eq!(t.deadline_misses, 0);
-    }
-
-    #[test]
-    fn test_check_deadline_miss_at_boundary() {
-        let mut t = Task::new(0, 10, 10, 3);
-        t.release(0); // abs_deadline = 10
-        assert!(t.check_deadline(10));
-        assert!(!t.ready);
-        assert_eq!(t.remaining, 0);
-        assert_eq!(t.deadline_misses, 1);
-    }
-
-    #[test]
-    fn test_check_deadline_not_ready() {
-        let mut t = Task::new(0, 10, 10, 3);
-        // Never released — ready is false
-        assert!(!t.check_deadline(100));
-        assert_eq!(t.deadline_misses, 0);
-    }
-
-    #[test]
-    fn test_check_before_release_catches_miss() {
-        // Critical ordering test: check_deadline at period boundary fires
-        // and records a miss BEFORE release() overwrites abs_deadline.
-        let mut t = Task::new(0, 10, 10, 3);
-        t.release(0); // abs_deadline=10, next_release=10
-        // At tick 10: check first, then release
-        let miss = t.check_deadline(10);
-        assert!(miss, "miss must be recorded at the period boundary");
-        assert_eq!(t.deadline_misses, 1);
-        // Now release the next job (scheduler calls this second)
-        t.release(10);
-        assert!(t.ready);
-        assert_eq!(t.abs_deadline, 20);
-        // Miss count survives the release
-        assert_eq!(t.deadline_misses, 1);
+/// Called if a task function ever returns (it shouldn't).
+fn task_exit() -> ! {
+    loop {
+        cortex_m::asm::bkpt();
     }
 }

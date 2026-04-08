@@ -113,6 +113,95 @@ pub fn infer(state: &[i32; {in_size}]) -> usize {{
 """
 
 
+C_TEMPLATE = """\
+// GENERATED — do not edit by hand. Run: uv run python export_weights.py
+
+#include "policy.h"
+
+static int W1[NN_HIDDEN][NN_IN] = {w1};
+static int B1[NN_HIDDEN] = {b1};
+
+static int W2[NN_HIDDEN][NN_HIDDEN] = {w2};
+static int B2[NN_HIDDEN] = {b2};
+
+static int W3[NN_OUT][NN_HIDDEN] = {w3};
+static int B3[NN_OUT] = {b3};
+
+static int
+relu(int x)
+{{
+  return x > 0 ? x : 0;
+}}
+
+int
+nn_infer(int state[NN_IN])
+{{
+  int h1[NN_HIDDEN];
+  int j, i;
+  for(j = 0; j < NN_HIDDEN; j++){{
+    long long acc = 0;
+    for(i = 0; i < NN_IN; i++)
+      acc += (long long)W1[j][i] * state[i];
+    h1[j] = relu((int)(acc / Q10_SCALE) + B1[j]);
+  }}
+
+  int h2[NN_HIDDEN];
+  for(j = 0; j < NN_HIDDEN; j++){{
+    long long acc = 0;
+    for(i = 0; i < NN_HIDDEN; i++)
+      acc += (long long)W2[j][i] * h1[i];
+    h2[j] = relu((int)(acc / Q10_SCALE) + B2[j]);
+  }}
+
+  int best_idx = 0;
+  int best_val = -2147483647;
+  for(j = 0; j < NN_OUT; j++){{
+    long long acc = 0;
+    for(i = 0; i < NN_HIDDEN; i++)
+      acc += (long long)W3[j][i] * h2[i];
+    int val = (int)(acc / Q10_SCALE) + B3[j];
+    if(val > best_val){{
+      best_val = val;
+      best_idx = j;
+    }}
+  }}
+
+  return best_idx;
+}}
+"""
+
+
+def fmt_2d_c(arr: np.ndarray) -> str:
+    rows = ",\n  ".join(
+        "{" + ", ".join(str(x) for x in row) + "}"
+        for row in arr
+    )
+    return "{\n  " + rows + "\n}"
+
+
+def fmt_1d_c(arr: np.ndarray) -> str:
+    return "{" + ", ".join(str(x) for x in arr) + "}"
+
+
+def generate_policy_c(layers: list, path: str) -> None:
+    if len(layers) != 3:
+        raise ValueError(f"Expected 3 layers, got {len(layers)}")
+    (w1, b1), (w2, b2), (w3, b3) = layers
+
+    content = C_TEMPLATE.format(
+        w1=fmt_2d_c(to_q10(w1)),
+        b1=fmt_1d_c(to_q10(b1)),
+        w2=fmt_2d_c(to_q10(w2)),
+        b2=fmt_1d_c(to_q10(b2)),
+        w3=fmt_2d_c(to_q10(w3)),
+        b3=fmt_1d_c(to_q10(b3)),
+    )
+
+    with open(path, "w") as f:
+        f.write(content)
+    print(f"Written: {path}  (C Q10 inference)")
+
+
 def generate_policy_rs(layers: list, path: str) -> None:
     if len(layers) != 3:
         raise ValueError(f"Expected 3 layers (two hidden + output), got {len(layers)}")
@@ -170,9 +259,16 @@ def main():
         json.dump(export, f, indent=2)
     print(f"Written: {OUTPUT_JSON}")
 
-    # Generate src/policy.rs
+    # Generate src/policy.rs (Rust bare-metal)
     generate_policy_rs(layers, OUTPUT_RUST)
-    print("\nNext step: cargo build --release")
+
+    # Generate xv6-riscv/kernel/policy.c (xv6 kernel)
+    output_c = "xv6-riscv/kernel/policy.c"
+    generate_policy_c(layers, output_c)
+
+    print("\nNext steps:")
+    print("  Rust: cargo build --release")
+    print("  xv6:  cd xv6-riscv && make qemu CPUS=1")
 
 
 if __name__ == "__main__":

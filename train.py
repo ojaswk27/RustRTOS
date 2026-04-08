@@ -15,6 +15,7 @@ import os
 
 import matplotlib
 import numpy as np
+import torch as th
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -23,6 +24,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from rtos_env import (
     IDLE_ACTION,
+    MIXED_CRITICALITY,
     NORMAL_TASKSET,
     STRESSED_TASKSET,
     RandomRTOSEnv,
@@ -36,10 +38,13 @@ EVAL_EPISODES = 100
 # Best reward config found via sweep
 REWARD_KWARGS = dict(
     miss_penalty=-3.0,
-    completion_reward=1.5,
+    completion_reward=2.0,
     urgency_weight=0.1,
     context_switch_penalty=-0.02,
     variable_exec=True,
+    starvation_weight=0.05,
+    jitter_weight=0.02,
+    criticality=MIXED_CRITICALITY,
 )
 
 
@@ -219,7 +224,7 @@ def make_env(utilization_range):
 def main():
     phase_steps = TRAIN_STEPS // 3
     ppo_kwargs = dict(
-        policy_kwargs=dict(net_arch=[32, 32]),
+        policy_kwargs=dict(net_arch=[32, 32], activation_fn=th.nn.ReLU),
         n_steps=2048,
         batch_size=64,
         n_epochs=10,
