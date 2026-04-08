@@ -162,12 +162,18 @@ sys_rtjobdone(void)
   if(!p->is_rt)
     return -1;
 
-  acquire(&p->lock);
+  // Hold tickslock as condition lock — clockintr holds it too when releasing
+  // jobs, so sleep() is atomic with respect to the wakeup. Never pass p->lock
+  // to sleep() because sleep() itself acquires p->lock (double-acquire panic).
+  acquire(&tickslock);
+  // If rt_ready=1, the task completed its job this period (before deadline).
+  // Count it here because the tick-based remaining path races with this syscall.
+  if(p->rt_ready)
+    p->completions++;
   p->rt_ready = 0;
   p->remaining = 0;
-  // Sleep on our own address; clockintr will wake us at next_release
-  sleep(p, &p->lock);
-  release(&p->lock);
+  sleep(p, &tickslock);   // releases tickslock, sleeps, reacquires on wakeup
+  release(&tickslock);
   return 0;
 }
 

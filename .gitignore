@@ -12,7 +12,7 @@ wheels/
 target/
 
 # Training artifacts
-ppo_rtos_model/
+# ppo_rtos_model/
 *.zip
 *.png
 policy_weights.json

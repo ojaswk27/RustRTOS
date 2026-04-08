@@ -170,9 +170,9 @@ clockintr()
     acquire(&tickslock);
     ticks++;
     wakeup(&ticks);
-    release(&tickslock);
 
-    // Real-time scheduling: deadline checks, job releases, work tracking
+    // RT work done under tickslock so sys_rtjobdone's sleep(p, &tickslock)
+    // is atomic with respect to job releases (no wakeup-before-sleep race).
     rt_ticks++;
     struct proc *p;
     for(p = proc; p < &proc[NPROC]; p++){
@@ -193,24 +193,22 @@ clockintr()
         p->abs_deadline = rt_ticks + p->deadline;
         p->next_release = rt_ticks + p->period;
         p->rt_ready = 1;
-        // Wake the process if it was sleeping (waiting for next period)
-        if(p->state == SLEEPING){
+        // Wake process if it slept in sys_rtjobdone (channel is p itself)
+        if(p->state == SLEEPING && p->chan == (void*)p){
           p->state = RUNNABLE;
+          p->chan = 0;
         }
       }
 
-      // 3. If this RT task is currently running on this CPU, decrement remaining
-      if(mycpu()->proc == p && p->rt_ready && p->remaining > 0){
+      // 3. Track last_scheduled for state vector (time_since_scheduled feature)
+      if(mycpu()->proc == p && p->rt_ready){
         p->last_scheduled = (int)rt_ticks;
-        p->remaining--;
-        if(p->remaining == 0){
-          p->completions++;
-          p->rt_ready = 0;
-        }
       }
 
       release(&p->lock);
     }
+
+    release(&tickslock);
   }
 
   // ask for the next timer interrupt. this also clears
