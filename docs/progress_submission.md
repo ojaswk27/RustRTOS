@@ -89,6 +89,67 @@ RL scheduler integrated into MIT's xv6 teaching OS (RISC-V):
 
 **Mälardalen programs ported**: matmul (10×10 int), bsort100 (bubble sort), CRC-32, primality test, negative-count, iterative Fibonacci.
 
+### Benchmark Provenance
+
+**Vestal (2007) Mixed-Criticality Model**
+
+Source: Vestal, S. "Preemptive Scheduling of Multi-criticality Systems with Varying Degrees of Execution Time Assurance." *Proc. IEEE Real-Time Systems Symposium (RTSS)*, 2007.
+
+Vestal introduced the mixed-criticality (MC) scheduling model where tasks carry different importance levels (HI/LO criticality). The key theoretical result: EDF fails to protect HI-critical tasks when they have longer periods than LO-soft tasks (the "inverted priority" scenario). When U_LO > 1, EDF's greedy nearest-deadline rule perpetually serves LO tasks, starving HI tasks. Our `rtvestal` benchmark directly implements this scenario: HI tasks (periods 50/75/100) vs LO tasks (periods 5/8/10), U_LO = 1.075. Our results confirm Vestal's prediction: EDF gets 5 HI misses on xv6, while NN gets 0.
+
+**Mälardalen WCET Benchmark Suite**
+
+Source: Gustafsson, J. et al. "The Mälardalen WCET Benchmarks: Past, Present and Future." *Proc. 10th International Workshop on Worst-Case Execution Time Analysis (WCET)*, 2010.
+
+The Mälardalen suite is a collection of 35+ small C programs designed for worst-case execution time (WCET) analysis. They have known, analyzable control flow — no recursion, bounded loops, no dynamic memory. We ported 6 benchmarks as real-time task bodies in `rtmaladalen`:
+
+| Benchmark | Origin | Description |
+|-----------|--------|-------------|
+| matmul | `matmult.c` | 10×10 integer matrix multiply. ~300 multiply-accumulate operations. Tests nested loop performance. |
+| bsort100 | `bs.c` | Bubble sort of 100 integers. Worst-case O(n²) comparisons. Tests branch prediction and memory access patterns. |
+| CRC-32 | `crc.c` | Cyclic redundancy check over 64-byte buffer. Nibble-based lookup table with polynomial 0xEDB88320. Tests table lookup performance. |
+| prime | `prime.c` | Trial division primality test for n = 999983. Tests tight integer division loops. |
+| cnt | `cnt.c` | Count negative values in 100-element array. Tests conditional branching with data-dependent control flow. |
+| fibcall | `fibcall.c` | Iterative Fibonacci to F(47). Tests simple loop with register-pressure arithmetic. |
+
+These provide *real computation* as RT task bodies, unlike spin loops — validating that the scheduler works with genuine workloads, not just CPU-burning stubs.
+
+---
+
+## Related Work and Comparison
+
+### Classical Scheduling Theory
+
+**Liu & Layland (1973)** — "Scheduling Algorithms for Multiprogramming in a Hard-Real-Time Environment." *JACM*, 20(1), 1973.
+
+Liu & Layland proved that EDF is optimal for uniprocessor implicit-deadline periodic tasks when U ≤ 1 and all tasks have equal importance. Our results confirm this: on uniform-criticality tasksets with U < 1, EDF achieves 0 misses and matches or beats NN. We do not claim to outperform EDF in its regime of optimality. Instead, we show that when Liu & Layland's assumptions break — mixed criticality, U > 1 — EDF is no longer optimal, and NN fills this gap.
+
+**Vestal (2007)** — see above. Our experimental results on both Python simulation and xv6 confirm Vestal's theoretical prediction that EDF fails on inverted-priority MC tasksets. The NN learns to protect HI-critical task slots from asymmetric reward signals alone, without hand-coded criticality rules.
+
+### RL Algorithm
+
+**Schulman et al. (2017)** — "Proximal Policy Optimization Algorithms." *arXiv:1707.06347*.
+
+We use PPO with clipped surrogate objective via stable-baselines3. Architecture: 24→32→32→7 MLP with ReLU activation, trained for 2M timesteps with curriculum learning (3 phases of increasing utilization). The trained policy is exported as Q10 fixed-point integer arrays (weights × 1024) and deployed identically on bare-metal ARM Cortex-M4 (Rust) and xv6-riscv (C). Code footprint: 5.1 KB on ARM, 54 KB xv6 kernel including weights.
+
+### RL for Scheduling
+
+**Mao et al. (2019)** — "Learning Scheduling Algorithms for Data Processing Clusters" (Decima). *Proc. ACM SIGCOMM*, 2019. Uses graph neural networks for cluster job scheduling. Demonstrates RL can learn scheduling policies that outperform hand-tuned heuristics, but targets data-center batch workloads with seconds-scale decisions.
+
+**Peng et al. (2019)** — "DL2: A Deep Learning-driven Scheduler for Deep Learning Clusters." *IEEE Trans. Parallel and Distributed Systems*, 2019. Similar data-center focus with GPU-based inference.
+
+**Our distinction**: We target *hard real-time* embedded systems with deterministic tick-based execution, mixed criticality, and sub-millisecond inference budgets. The NN runs as Q10 fixed-point integer arithmetic inside the kernel timer interrupt handler — no floating point, no GPU, no Python runtime. This is a fundamentally different deployment target than data-center schedulers: our policy must execute in < 1 tick on a microcontroller, not in milliseconds on a server.
+
+### Metrics Comparison
+
+| Metric | Our Result | Reference |
+|--------|-----------|-----------|
+| HI-critical miss reduction vs EDF (Vestal scenario) | −71% (Python), −100% (xv6) | Vestal (2007) predicts EDF failure — confirmed |
+| EDF optimality under U ≤ 1, uniform criticality | Confirmed: EDF = 0 misses, NN = 0 misses | Liu & Layland (1973) |
+| NN inference overhead | < 1 tick (Q10 integer, 3-layer MLP) | Novel deployment target |
+| Code footprint | 5.1 KB (ARM), 54 KB kernel (xv6 with weights) | Fits STM32F411 (512 KB flash) |
+| Training cost | 2M timesteps, ~10 min on laptop CPU | Standard PPO scale |
+
 ---
 
 ## Results
