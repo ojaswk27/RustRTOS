@@ -65,6 +65,20 @@ VERY_HARD_TASKSET = [
 DEFAULT_CRITICALITY = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # uniform (no mixed crit)
 MIXED_CRITICALITY = [5.0, 5.0, 5.0, 1.0, 1.0, 1.0]    # T0-T2 critical, T3-T5 soft
 
+# Vestal (2007) inverted-priority mixed-criticality taskset.
+# T0-T2 (HI-critical): long periods — EDF deprioritises them (far deadlines).
+# T3-T5 (LO-soft): short periods — EDF always serves them first.
+# U_HI=0.25, U_LO=1.075 (overflows alone!), U_tot=1.325.
+# Classical result: EDF fails to protect HI tasks here (Vestal 2007, RTSS).
+VESTAL_TASKSET = [
+    (50, 50,  5),   # T0 HI: U=0.100
+    (75, 75,  6),   # T1 HI: U=0.080
+    (100, 100, 7),  # T2 HI: U=0.070
+    (5,   5,  2),   # T3 LO: U=0.400
+    (8,   8,  3),   # T4 LO: U=0.375
+    (10, 10,  3),   # T5 LO: U=0.300
+]
+
 # Periods used when randomly generating tasksets
 CANDIDATE_PERIODS = [5, 10, 15, 20, 25, 30, 50, 100]
 

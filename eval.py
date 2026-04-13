@@ -18,6 +18,7 @@ from rtos_env import (
     STRESSED_TASKSET,
     HARD_TASKSET,
     VERY_HARD_TASKSET,
+    VESTAL_TASKSET,
     MIXED_CRITICALITY,
     IDLE_ACTION,
 )
@@ -52,12 +53,12 @@ def edf(tasks, tick):
     return best
 
 
-def run_eval(taskset, scheduler, model, episodes, criticality=None):
+def run_eval(taskset, scheduler, model, episodes, criticality=None, variable_exec=True):
     """Run evaluation, return dict of metrics."""
     all_misses, all_crit, all_soft, all_ctx, all_starv, all_rew = [], [], [], [], [], []
     for _ in range(episodes):
         env = RTOSEnv(
-            taskset=taskset, max_ticks=300, variable_exec=True,
+            taskset=taskset, max_ticks=300, variable_exec=variable_exec,
             criticality=criticality,
         )
         obs, _ = env.reset()
@@ -148,3 +149,28 @@ for taskset_name, taskset in [
         results.append((label, d))
     results.sort(key=lambda x: x[1]["crit_misses"])
     print_table(f"{taskset_name} — Mixed Criticality, Variable Exec", results, show_crit=True)
+
+# ── Vestal (2007) inverted-priority MC benchmark ──
+# Variable exec (avg 75% WCET): effective U_LO < 1, EDF handles it.
+results = []
+for label, fn in schedulers:
+    d = run_eval(VESTAL_TASKSET, fn, model, EVAL_EPISODES, criticality=MIXED_CRITICALITY)
+    results.append((label, d))
+results.sort(key=lambda x: x[1]["crit_misses"])
+print_table(
+    "Vestal MC — Inverted Priority, Variable Exec (avg U_LO≈0.81)",
+    results, show_crit=True
+)
+
+# Fixed exec: exact WCET every job — U_LO=1.075, matches xv6 behavior.
+# This is the canonical Vestal failure scenario for EDF.
+results_fx = []
+for label, fn in schedulers:
+    d = run_eval(VESTAL_TASKSET, fn, model, EVAL_EPISODES,
+                 criticality=MIXED_CRITICALITY, variable_exec=False)
+    results_fx.append((label, d))
+results_fx.sort(key=lambda x: x[1]["crit_misses"])
+print_table(
+    "Vestal MC — Inverted Priority, Fixed Exec (U_LO=1.075, EDF failure mode)",
+    results_fx, show_crit=True
+)
