@@ -516,9 +516,9 @@ build_rt_state(int state[NN_IN])
 }
 
 // Per-CPU process scheduler.
-// Two-tier design:
-//   Tier 1: NN inference for registered RT tasks (when use_nn_scheduler=1)
-//   Tier 2: Round-robin fallback for non-RT processes (shell, init, etc.)
+// Tier 1: RT scheduling via use_nn_scheduler mode:
+//   0 = round-robin (all procs), 1 = NN, 2 = EDF, 3 = RMS
+// Tier 2: Round-robin fallback for non-RT processes (shell, init, etc.)
 void
 scheduler(void)
 {
@@ -533,41 +533,107 @@ scheduler(void)
 
     int found = 0;
 
-    // Tier 1: NN scheduling for RT tasks
-    if(use_nn_scheduler){
-      int have_rt = 0;
+    // Tier 0: RT cleanup — let tasks with remaining==0 call rtjobdone() and sleep.
+    // Without this, under EDF/RMS/NN the scheduler only picks tasks with remaining>0,
+    // starving tasks that need to signal job completion before sleeping.
+    if(use_nn_scheduler != 0){
       for(p = proc; p < &proc[NPROC]; p++){
-        if(p->is_rt && p->rt_ready && p->state == RUNNABLE){
-          have_rt = 1;
-          break;
-        }
-      }
-
-      if(have_rt){
-        build_rt_state(state);
-        int action = nn_infer(state);
-
-        if(action != IDLE_ACTION && action < NUM_RT_TASKS){
-          // Find the proc with this rt_id
-          for(p = proc; p < &proc[NPROC]; p++){
-            if(p->is_rt && p->rt_id == action && p->rt_ready && p->state == RUNNABLE){
-              acquire(&p->lock);
-              if(p->state == RUNNABLE && p->rt_ready){
-                p->state = RUNNING;
-                c->proc = p;
-                swtch(&c->context, &p->context);
-                c->proc = 0;
-                found = 1;
-              }
-              release(&p->lock);
-              break;
-            }
+        if(p->is_rt && p->rt_ready && p->state == RUNNABLE && p->remaining == 0){
+          acquire(&p->lock);
+          if(p->state == RUNNABLE && p->rt_ready && p->remaining == 0){
+            p->state = RUNNING;
+            c->proc = p;
+            swtch(&c->context, &p->context);
+            c->proc = 0;
+            found = 1;
           }
+          release(&p->lock);
+          break;  // one cleanup task per cycle
         }
       }
     }
 
-    // Tier 2: Round-robin for all RUNNABLE processes (including RT if NN is off)
+    // Tier 1: RT scheduling (mode 1=NN, 2=EDF, 3=RMS)
+    if(!found && use_nn_scheduler != 0){
+      struct proc *chosen = 0;
+
+      if(use_nn_scheduler == 1){
+        // NN: run inference and look up chosen task
+        int have_rt = 0;
+        for(p = proc; p < &proc[NPROC]; p++){
+          if(p->is_rt && p->rt_ready && p->state == RUNNABLE && p->remaining > 0){
+            have_rt = 1;
+            break;
+          }
+        }
+        if(have_rt){
+          build_rt_state(state);
+          int action = nn_infer(state);
+          if(action != IDLE_ACTION && action < NUM_RT_TASKS){
+            for(p = proc; p < &proc[NPROC]; p++){
+              if(p->is_rt && p->rt_id == action && p->rt_ready &&
+                 p->state == RUNNABLE && p->remaining > 0){
+                chosen = p;
+                break;
+              }
+            }
+          }
+        }
+      } else if(use_nn_scheduler == 2){
+        // EDF: pick RUNNABLE RT task with earliest absolute deadline
+        for(p = proc; p < &proc[NPROC]; p++){
+          if(p->is_rt && p->rt_ready && p->state == RUNNABLE && p->remaining > 0){
+            if(chosen == 0 || p->abs_deadline < chosen->abs_deadline)
+              chosen = p;
+          }
+        }
+      } else if(use_nn_scheduler == 3){
+        // RMS: pick RUNNABLE RT task with shortest period
+        for(p = proc; p < &proc[NPROC]; p++){
+          if(p->is_rt && p->rt_ready && p->state == RUNNABLE && p->remaining > 0){
+            if(chosen == 0 || p->period < chosen->period)
+              chosen = p;
+          }
+        }
+      }
+
+      if(chosen != 0){
+        acquire(&chosen->lock);
+        if(chosen->state == RUNNABLE && chosen->rt_ready && chosen->remaining > 0){
+          chosen->state = RUNNING;
+          c->proc = chosen;
+          swtch(&c->context, &chosen->context);
+          c->proc = 0;
+          found = 1;
+        }
+        release(&chosen->lock);
+      }
+    }
+
+    // Tier 2a: Starvation prevention — after 30 consecutive Tier 1 runs,
+    // give a non-RT process one scheduling slot so pause()/wait() can make progress.
+    static int nonrt_starvation = 0;
+    if(found){
+      nonrt_starvation++;
+    } else {
+      nonrt_starvation = 0;
+    }
+    if(nonrt_starvation >= 30){
+      nonrt_starvation = 0;
+      for(p = proc; p < &proc[NPROC]; p++){
+        if(p->is_rt) continue;
+        acquire(&p->lock);
+        if(p->state == RUNNABLE){
+          p->state = RUNNING;
+          c->proc = p;
+          swtch(&c->context, &p->context);
+          c->proc = 0;
+        }
+        release(&p->lock);
+      }
+    }
+
+    // Tier 2b: Round-robin for all RUNNABLE processes (non-RT, or RT when mode=0)
     if(!found){
       for(p = proc; p < &proc[NPROC]; p++){
         acquire(&p->lock);

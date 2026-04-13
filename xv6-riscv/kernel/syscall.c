@@ -105,6 +105,7 @@ extern uint64 sys_rtregister(void);
 extern uint64 sys_rtjobdone(void);
 extern uint64 sys_rtstats(void);
 extern uint64 sys_setscheduler(void);
+extern uint64 sys_rtremaining(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -134,6 +135,7 @@ static uint64 (*syscalls[])(void) = {
 [SYS_rtjobdone]  sys_rtjobdone,
 [SYS_rtstats]    sys_rtstats,
 [SYS_setscheduler] sys_setscheduler,
+[SYS_rtremaining]  sys_rtremaining,
 };
 
 void

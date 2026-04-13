@@ -207,11 +207,25 @@ sys_rtstats(void)
 // Set scheduler mode: 1 = NN, 0 = round-robin for RT tasks
 extern int use_nn_scheduler;
 
+// Return remaining CPU budget (ticks) for the calling RT task.
+// Task spins on this to know when its job's CPU budget is consumed.
+uint64
+sys_rtremaining(void)
+{
+  struct proc *p = myproc();
+  if(!p->is_rt)
+    return 0;
+  return p->remaining;
+}
+
 uint64
 sys_setscheduler(void)
 {
   int mode;
   argint(0, &mode);
-  use_nn_scheduler = (mode != 0);
+  // 0=RR, 1=NN, 2=EDF, 3=RMS
+  if(mode < 0 || mode > 3)
+    return -1;
+  use_nn_scheduler = mode;
   return 0;
 }

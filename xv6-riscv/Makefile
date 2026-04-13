@@ -147,6 +147,8 @@ UPROGS=\
 	$U/_forphan\
 	$U/_dorphan\
 	$U/_rtdemo\
+	$U/_rtbench\
+	$U/_rtdrone\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

@@ -28,6 +28,7 @@ int rtregister(int, int, int, int, int);
 int rtjobdone(void);
 int rtstats(int, int*, int*);
 int setscheduler(int);
+int rtremaining(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

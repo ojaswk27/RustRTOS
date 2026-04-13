@@ -200,9 +200,11 @@ clockintr()
         }
       }
 
-      // 3. Track last_scheduled for state vector (time_since_scheduled feature)
+      // 3. Decrement CPU budget while task is running; track last_scheduled
       if(mycpu()->proc == p && p->rt_ready){
         p->last_scheduled = (int)rt_ticks;
+        if(p->remaining > 0)
+          p->remaining--;
       }
 
       release(&p->lock);

@@ -1,7 +1,7 @@
 // rtdemo.c — RL Scheduler Demo
 //
 // Launches 6 periodic real-time tasks, waits for the simulation
-// to run (300 ticks), then prints deadline miss and completion stats.
+// to run (350 ticks), then prints deadline miss and completion stats.
 //
 // Usage:
 //   rtdemo        — run with NN scheduler (default)
@@ -32,30 +32,6 @@ static struct rt_config taskset[] = {
 #define NTASKS 6
 #define SIM_TICKS 350
 
-// Calibrated at startup: iterations of the spin loop per one clock tick.
-// Shared with children via fork (children inherit parent's address space).
-static volatile long iters_per_tick;
-
-// Calibrate how many spin iterations fit in one wall-clock tick.
-// Waits for a tick boundary so the measurement is a full tick.
-static void
-calibrate(void)
-{
-  uint s;
-  // Wait for a tick boundary
-  s = uptime();
-  while(uptime() == s)
-    ;
-  s = uptime();
-  volatile long cal = 0;
-  while(uptime() == s)
-    cal++;
-  // Use half to leave some headroom; tasks must still fit in deadline
-  iters_per_tick = cal / 2;
-  if(iters_per_tick < 1)
-    iters_per_tick = 1;
-}
-
 int
 main(int argc, char *argv[])
 {
@@ -66,9 +42,6 @@ main(int argc, char *argv[])
     use_nn = 0;
 
   setscheduler(use_nn);
-
-  // Calibrate before forking so children inherit iters_per_tick
-  calibrate();
 
   printf("========================================\n");
   printf("  RL Scheduler Demo - xv6\n");
@@ -92,15 +65,18 @@ main(int argc, char *argv[])
       // Sleep until first period release
       rtjobdone();
 
-      // Periodic task loop: do work, then signal done and sleep
+      // Periodic task loop:
+      //   1. Spin until the kernel says our CPU budget (remaining) is consumed.
+      //      The kernel decrements remaining each tick we are RUNNING, so this
+      //      accurately measures actual CPU time — not wall clock.
+      //   2. Call rtjobdone() to count completion and sleep until next release.
       while(1){
-        // Simulate wcet ticks of CPU work via a computation loop.
-        // The loop only advances when this task is RUNNING, so it
-        // measures actual CPU time consumed — not wall clock.
-        volatile long work = (long)t->wcet * iters_per_tick;
-        for(volatile long j = 0; j < work; j++)
-          ;
-        // Signal job done; syscall counts completion if still before deadline
+        // Poll remaining; between syscalls spin to keep CPU busy so the
+        // kernel tick handler can decrement the budget while we run.
+        while(rtremaining() > 0){
+          for(volatile int spin = 0; spin < 10000; spin++)
+            ;
+        }
         rtjobdone();
       }
     }

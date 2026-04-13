@@ -24,3 +24,4 @@
 #define SYS_rtjobdone  23
 #define SYS_rtstats    24
 #define SYS_setscheduler 25
+#define SYS_rtremaining  26

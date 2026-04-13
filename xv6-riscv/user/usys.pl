@@ -46,3 +46,4 @@ entry("rtregister");
 entry("rtjobdone");
 entry("rtstats");
 entry("setscheduler");
+entry("rtremaining");
