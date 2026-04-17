@@ -161,6 +161,7 @@ found:
   p->misses = 0;
   p->completions = 0;
   p->rt_ready = 0;
+  p->mlfq_level = 0;
 
   return p;
 }
@@ -189,6 +190,7 @@ freeproc(struct proc *p)
   p->rt_ready = 0;
   p->misses = 0;
   p->completions = 0;
+  p->mlfq_level = 0;
   p->state = UNUSED;
 }
 
@@ -553,7 +555,7 @@ scheduler(void)
       }
     }
 
-    // Tier 1: RT scheduling (mode 1=NN, 2=EDF, 3=RMS)
+    // Tier 1: RT scheduling (mode 1=NN, 2=EDF, 3=RMS, 4=MLFQ)
     if(!found && use_nn_scheduler != 0){
       struct proc *chosen = 0;
 
@@ -593,6 +595,27 @@ scheduler(void)
           if(p->is_rt && p->rt_ready && p->state == RUNNABLE && p->remaining > 0){
             if(chosen == 0 || p->period < chosen->period)
               chosen = p;
+          }
+        }
+      } else if(use_nn_scheduler == 4){
+        // MLFQ: pick highest-priority (lowest level) RUNNABLE RT task.
+        // Aging: every 50 Tier-1 invocations, reset all RT tasks to level 0
+        // to prevent starvation of long-period tasks.
+        static int mlfq_age = 0;
+        mlfq_age++;
+        if(mlfq_age >= 50){
+          mlfq_age = 0;
+          for(p = proc; p < &proc[NPROC]; p++){
+            if(p->is_rt) p->mlfq_level = 0;
+          }
+        }
+        for(int lvl = 0; lvl <= 2 && chosen == 0; lvl++){
+          for(p = proc; p < &proc[NPROC]; p++){
+            if(p->is_rt && p->rt_ready && p->state == RUNNABLE &&
+               p->remaining > 0 && p->mlfq_level == lvl){
+              chosen = p;
+              break;
+            }
           }
         }
       }

@@ -149,6 +149,7 @@ sys_rtregister(void)
   p->misses = 0;
   p->completions = 0;
   p->rt_ready = 0;
+  p->mlfq_level = 0;
   release(&p->lock);
 
   return 0;
@@ -223,8 +224,8 @@ sys_setscheduler(void)
 {
   int mode;
   argint(0, &mode);
-  // 0=RR, 1=NN, 2=EDF, 3=RMS
-  if(mode < 0 || mode > 3)
+  // 0=RR, 1=NN, 2=EDF, 3=RMS, 4=MLFQ
+  if(mode < 0 || mode > 4)
     return -1;
   use_nn_scheduler = mode;
   return 0;

@@ -119,4 +119,5 @@ struct proc {
   uint misses;                 // cumulative deadline miss count
   uint completions;            // cumulative completion count
   int  rt_ready;               // 1 = has pending work
+  int  mlfq_level;             // MLFQ priority level: 0=high, 1=mid, 2=low
 };

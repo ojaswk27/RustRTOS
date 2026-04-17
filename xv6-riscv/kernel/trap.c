@@ -12,6 +12,7 @@ uint rt_ticks;
 
 extern char trampoline[], uservec[];
 extern struct proc proc[];
+extern int use_nn_scheduler;
 
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
@@ -203,8 +204,13 @@ clockintr()
       // 3. Decrement CPU budget while task is running; track last_scheduled
       if(mycpu()->proc == p && p->rt_ready){
         p->last_scheduled = (int)rt_ticks;
-        if(p->remaining > 0)
+        if(p->remaining > 0){
           p->remaining--;
+          // MLFQ: demote when task exhausts its full budget (used full quantum)
+          if(p->remaining == 0 && use_nn_scheduler == 4){
+            if(p->mlfq_level < 2) p->mlfq_level++;
+          }
+        }
       }
 
       release(&p->lock);

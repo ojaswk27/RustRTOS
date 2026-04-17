@@ -167,6 +167,7 @@ static const char *mode_name(int mode)
   if(mode == 1) return "NN";
   if(mode == 2) return "EDF";
   if(mode == 3) return "RMS";
+  if(mode == 4) return "MLFQ";
   return "RR";
 }
 
@@ -177,9 +178,10 @@ main(int argc, char *argv[])
   int mode = 1;
 
   if(argc > 1){
-    if(strcmp(argv[1], "edf") == 0)      mode = 2;
-    else if(strcmp(argv[1], "rms") == 0) mode = 3;
-    else if(strcmp(argv[1], "rr") == 0)  mode = 0;
+    if(strcmp(argv[1], "edf") == 0)        mode = 2;
+    else if(strcmp(argv[1], "rms") == 0)   mode = 3;
+    else if(strcmp(argv[1], "rr") == 0)    mode = 0;
+    else if(strcmp(argv[1], "mlfq") == 0)  mode = 4;
   }
 
   setscheduler(mode);

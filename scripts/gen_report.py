@@ -103,7 +103,7 @@ def print_suite_summary(suite, data):
     print(f"  {'Mode':4s}  {'Completions':>11s}  {'HI Misses':>9s}  "
           f"{'LO Misses':>9s}  {'Total':>5s}")
     print(f"  {'-'*4}  {'-'*11}  {'-'*9}  {'-'*9}  {'-'*5}")
-    for mode in ["NN", "EDF", "RMS", "RR"]:
+    for mode in ["NN", "EDF", "RMS", "RR", "MLFQ"]:
         if mode not in data:
             continue
         tc, cm, sm, tm = totals(data[mode])
@@ -113,7 +113,7 @@ def print_suite_summary(suite, data):
 
 
 def latex_table(suite, data, caption_extra=""):
-    modes = [m for m in ["NN", "EDF", "RMS", "RR"] if m in data]
+    modes = [m for m in ["NN", "EDF", "RMS", "RR", "MLFQ"] if m in data]
     label = SUITE_LABELS.get(suite, suite)
     header = " & ".join(f"\\textbf{{{m}}}" for m in modes)
     rows = {
@@ -146,7 +146,7 @@ def latex_table(suite, data, caption_extra=""):
 def generate_chart(all_data, outdir="report_figures"):
     os.makedirs(outdir, exist_ok=True)
     suites = [s for s in ["BENCH", "VESTAL", "MALA"] if s in all_data]
-    modes  = ["NN", "EDF", "RMS", "RR"]
+    modes  = ["NN", "EDF", "RMS", "RR", "MLFQ"]
 
     # ── Figure 1: HI-critical misses across all suites ──────────────
     fig, axes = plt.subplots(1, len(suites), figsize=(5 * len(suites), 5),
@@ -157,7 +157,7 @@ def generate_chart(all_data, outdir="report_figures"):
                  "NN (trained) vs classical schedulers — xv6-riscv",
                  fontsize=13, fontweight="bold")
 
-    colors = {"NN": "#2ecc71", "EDF": "#e74c3c", "RMS": "#e67e22", "RR": "#95a5a6"}
+    colors = {"NN": "#2ecc71", "EDF": "#e74c3c", "RMS": "#e67e22", "RR": "#95a5a6", "MLFQ": "#9b59b6"}
 
     for ax, suite in zip(axes, suites):
         data = all_data[suite]
@@ -192,7 +192,7 @@ def generate_chart(all_data, outdir="report_figures"):
 
         for ax, suite in zip(axes2, suites):
             data = all_data[suite]
-            present = [m for m in modes if m in data]
+            present = [m for m in ["NN", "EDF", "RMS", "RR", "MLFQ"] if m in data]
             cm = [totals(data[m])[1] for m in present]
             sm = [totals(data[m])[2] for m in present]
             x  = np.arange(len(present))
