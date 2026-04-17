@@ -162,6 +162,7 @@ found:
   p->completions = 0;
   p->rt_ready = 0;
   p->mlfq_level = 0;
+  p->mlfq_budget = MLFQ_Q0_SLICE;
 
   return p;
 }
@@ -191,6 +192,7 @@ freeproc(struct proc *p)
   p->misses = 0;
   p->completions = 0;
   p->mlfq_level = 0;
+  p->mlfq_budget = 0;
   p->state = UNUSED;
 }
 
@@ -598,23 +600,25 @@ scheduler(void)
           }
         }
       } else if(use_nn_scheduler == 4){
-        // MLFQ: pick highest-priority (lowest level) RUNNABLE RT task.
-        // Aging: every 50 Tier-1 invocations, reset all RT tasks to level 0
-        // to prevent starvation of long-period tasks.
-        static int mlfq_age = 0;
-        mlfq_age++;
-        if(mlfq_age >= 50){
-          mlfq_age = 0;
-          for(p = proc; p < &proc[NPROC]; p++){
-            if(p->is_rt) p->mlfq_level = 0;
-          }
+        // MLFQ: 4 queues (0=highest priority), per-tick budget demotion in clockintr.
+        // Boost every MLFQ_BOOST ticks resets all tasks to Q0 (in clockintr).
+        // Scheduling: highest non-empty queue; within a level, pick longest-waiting.
+        int best_lvl = MLFQ_NQUEUES;
+        for(p = proc; p < &proc[NPROC]; p++){
+          if(p->is_rt && p->rt_ready && p->state == RUNNABLE &&
+             p->remaining > 0 && p->mlfq_level < best_lvl)
+            best_lvl = p->mlfq_level;
         }
-        for(int lvl = 0; lvl <= 2 && chosen == 0; lvl++){
+        if(best_lvl < MLFQ_NQUEUES){
+          int max_wait = -1;
           for(p = proc; p < &proc[NPROC]; p++){
             if(p->is_rt && p->rt_ready && p->state == RUNNABLE &&
-               p->remaining > 0 && p->mlfq_level == lvl){
-              chosen = p;
-              break;
+               p->remaining > 0 && p->mlfq_level == best_lvl){
+              int wait = (int)rt_ticks - p->last_scheduled;
+              if(chosen == 0 || wait > max_wait){
+                max_wait = wait;
+                chosen = p;
+              }
             }
           }
         }

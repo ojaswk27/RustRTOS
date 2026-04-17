@@ -151,6 +151,7 @@ UPROGS=\
 	$U/_rtdrone\
 	$U/_rtvestal\
 	$U/_rtmaladalen\
+	$U/_rtgui\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

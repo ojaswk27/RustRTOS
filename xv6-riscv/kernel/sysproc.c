@@ -150,6 +150,7 @@ sys_rtregister(void)
   p->completions = 0;
   p->rt_ready = 0;
   p->mlfq_level = 0;
+  p->mlfq_budget = MLFQ_Q0_SLICE;
   release(&p->lock);
 
   return 0;
@@ -228,5 +229,17 @@ sys_setscheduler(void)
   if(mode < 0 || mode > 4)
     return -1;
   use_nn_scheduler = mode;
+  // On switch to MLFQ, reset all RT task queue levels
+  if(mode == 4){
+    struct proc *pp;
+    for(pp = proc; pp < &proc[NPROC]; pp++){
+      if(pp->is_rt){
+        acquire(&pp->lock);
+        pp->mlfq_level = 0;
+        pp->mlfq_budget = MLFQ_Q0_SLICE;
+        release(&pp->lock);
+      }
+    }
+  }
   return 0;
 }

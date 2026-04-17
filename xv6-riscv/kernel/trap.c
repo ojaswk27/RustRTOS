@@ -204,16 +204,33 @@ clockintr()
       // 3. Decrement CPU budget while task is running; track last_scheduled
       if(mycpu()->proc == p && p->rt_ready){
         p->last_scheduled = (int)rt_ticks;
-        if(p->remaining > 0){
+        if(p->remaining > 0)
           p->remaining--;
-          // MLFQ: demote when task exhausts its full budget (used full quantum)
-          if(p->remaining == 0 && use_nn_scheduler == 4){
-            if(p->mlfq_level < 2) p->mlfq_level++;
+
+        // MLFQ: per-tick quantum budget, independent of RT remaining budget.
+        // When mlfq_budget expires, demote to next queue and reset budget.
+        if(use_nn_scheduler == 4){
+          if(p->mlfq_budget > 0) p->mlfq_budget--;
+          if(p->mlfq_budget == 0){
+            if(p->mlfq_level < MLFQ_NQUEUES - 1) p->mlfq_level++;
+            p->mlfq_budget = MLFQ_Q0_SLICE << p->mlfq_level;
           }
         }
       }
 
       release(&p->lock);
+    }
+
+    // MLFQ periodic priority boost: reset all RT tasks to Q0 every MLFQ_BOOST ticks.
+    if(use_nn_scheduler == 4 && rt_ticks % MLFQ_BOOST == 0){
+      for(p = proc; p < &proc[NPROC]; p++){
+        if(p->is_rt && p->state != UNUSED){
+          acquire(&p->lock);
+          p->mlfq_level = 0;
+          p->mlfq_budget = MLFQ_Q0_SLICE;
+          release(&p->lock);
+        }
+      }
     }
 
     release(&tickslock);

@@ -40,12 +40,22 @@ CRIT_MAP = {
         "matmul": True, "bsort100": True, "crc": True,
         "prime": False, "cnt": False, "fibcall": False,
     },
+    "GUI": {
+        "input_poll": False, "render": True, "blit": True,
+        "flood_fill": False, "crc_save": False, "undo_snap": False,
+    },
+    "DRONE": {
+        "imu_read": True, "ahrs_filter": True, "pid_control": True,
+        "actuator_upd": False, "telemetry": False, "data_log": False,
+    },
 }
 
 SUITE_LABELS = {
     "BENCH":  "rtbench (U=1.90)",
     "VESTAL": "Vestal MC (U=1.33)",
     "MALA":   "Mälardalen (U=1.16)",
+    "GUI":    "rtgui/MS Paint (U=1.04)",
+    "DRONE":  "rtdrone Q10 (U=1.50)",
 }
 
 
@@ -53,7 +63,7 @@ def parse_input(lines):
     """
     Returns {suite: {mode: {task_name: (completions, misses, is_critical)}}}
     """
-    results = {"BENCH": {}, "VESTAL": {}, "MALA": {}}
+    results = {"BENCH": {}, "VESTAL": {}, "MALA": {}, "GUI": {}, "DRONE": {}}
     in_csv = False
 
     for line in lines:
@@ -145,7 +155,7 @@ def latex_table(suite, data, caption_extra=""):
 
 def generate_chart(all_data, outdir="report_figures"):
     os.makedirs(outdir, exist_ok=True)
-    suites = [s for s in ["BENCH", "VESTAL", "MALA"] if s in all_data]
+    suites = [s for s in ["BENCH", "VESTAL", "MALA", "GUI", "DRONE"] if s in all_data]
     modes  = ["NN", "EDF", "RMS", "RR", "MLFQ"]
 
     # ── Figure 1: HI-critical misses across all suites ──────────────

@@ -132,6 +132,79 @@ static void bench_fibcall(volatile int *out)
 }
 
 // ---------------------------------------------------------------
+// Additional Mälardalen ports (implemented, documented for report)
+// ---------------------------------------------------------------
+
+// jfdctint: 8×8 integer JPEG DCT (from Mälardalen jfdctint.c)
+// Uses scaled integer arithmetic to avoid floating point.
+// Input: 8×8 int16 block; Output: 8×8 DCT coefficients.
+static void __attribute__((unused)) bench_jfdctint(volatile int *out)
+{
+  static int block[64];
+  // Init with synthetic pixel data (row/col pattern)
+  for(int i = 0; i < 8; i++)
+    for(int j = 0; j < 8; j++)
+      block[i*8+j] = (i * 12 + j * 7 + 4) & 0xFF;
+
+  // 1D DCT pass on rows (scaled integer, no divide needed)
+  for(int row = 0; row < 8; row++){
+    int *p = block + row*8;
+    int t0 = p[0]+p[7], t7 = p[0]-p[7];
+    int t1 = p[1]+p[6], t6 = p[1]-p[6];
+    int t2 = p[2]+p[5], t5 = p[2]-p[5];
+    int t3 = p[3]+p[4], t4 = p[3]-p[4];
+    int s0 = t0+t3, s3 = t0-t3, s1 = t1+t2, s2 = t1-t2;
+    p[0] = s0+s1; p[4] = s0-s1;
+    p[2] = s3 + ((s2*2841 + 1024) >> 11);
+    p[6] = s3 - ((s2*2841 + 1024) >> 11);
+    int z1 = (t4+t7)*1108, z2 = (t5+t6)*2676;
+    int z3 = t4*-3784+z1, z4 = t5*-5765+z2;
+    int z5 = t6*3784+z2, z6 = t7*5765+z1;
+    p[1] = (z6+z5+512)>>10; p[3] = (z4+z3+512)>>10;
+    p[5] = (z3-z4+512)>>10; p[7] = (z5-z6+512)>>10;
+  }
+  // 1D DCT pass on columns
+  for(int col = 0; col < 8; col++){
+    int t0 = block[col]+block[56+col], t7 = block[col]-block[56+col];
+    int t1 = block[8+col]+block[48+col], t6 = block[8+col]-block[48+col];
+    int t2 = block[16+col]+block[40+col], t5 = block[16+col]-block[40+col];
+    int t3 = block[24+col]+block[32+col], t4 = block[24+col]-block[32+col];
+    int s0 = t0+t3, s3 = t0-t3, s1 = t1+t2, s2 = t1-t2;
+    block[col]    = (s0+s1+4)>>3; block[32+col] = (s0-s1+4)>>3;
+    block[16+col] = (s3 + ((s2*2841+1024)>>11)+4)>>3;
+    block[48+col] = (s3 - ((s2*2841+1024)>>11)+4)>>3;
+    (void)t4; (void)t5; (void)t6; (void)t7;
+    block[8+col] = t4; block[24+col] = t5;
+    block[40+col] = t6; block[56+col] = t7;
+  }
+  *out = block[0];  // DC coefficient
+}
+
+// ludcmp: 5×5 LU decomposition (Doolittle's algorithm, integer scaled by 256)
+// From Mälardalen ludcmp.c. Tests division-heavy numeric code.
+static void __attribute__((unused)) bench_ludcmp(volatile int *out)
+{
+  // 5×5 integer matrix (values scaled ×256 to simulate fixed-point)
+  int a[5][5] = {
+    {256, 512, 256, 128, 64},
+    {128, 256, 512, 256, 128},
+    {64,  128, 256, 512, 256},
+    {128,  64, 128, 256, 512},
+    {256, 128,  64, 128, 256},
+  };
+  // Doolittle in-place LU decomposition
+  for(int k = 0; k < 5; k++){
+    for(int i = k+1; i < 5; i++){
+      if(a[k][k] == 0) break;
+      a[i][k] = (a[i][k] * 256) / a[k][k];  // L factor
+      for(int j = k+1; j < 5; j++)
+        a[i][j] -= (a[i][k] * a[k][j]) >> 8;
+    }
+  }
+  *out = a[0][0] + a[4][4];
+}
+
+// ---------------------------------------------------------------
 // Task configuration
 // ---------------------------------------------------------------
 struct mal_task {

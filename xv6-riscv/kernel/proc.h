@@ -119,5 +119,10 @@ struct proc {
   uint misses;                 // cumulative deadline miss count
   uint completions;            // cumulative completion count
   int  rt_ready;               // 1 = has pending work
-  int  mlfq_level;             // MLFQ priority level: 0=high, 1=mid, 2=low
+  int  mlfq_level;             // MLFQ queue level: 0=highest, MLFQ_NQUEUES-1=lowest
+  int  mlfq_budget;            // ticks remaining in current MLFQ quantum
 };
+
+#define MLFQ_NQUEUES  4
+#define MLFQ_Q0_SLICE 2   // Q0 quantum: 2 ticks (shortest, highest priority)
+#define MLFQ_BOOST    100 // reset all tasks to Q0 every N ticks
