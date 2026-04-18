@@ -33,3 +33,4 @@ report_figures/
 .env.*
 
 .claude
+FINAL_PLAN.md

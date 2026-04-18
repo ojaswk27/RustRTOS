@@ -1,6 +1,6 @@
 # Project Progress Submission
 **RL-Based Real-Time OS Scheduler — xv6 and Bare-Metal Cortex-M4**
-*13 April 2026*
+*18 April 2026*
 
 ---
 
@@ -114,6 +114,10 @@ The Mälardalen suite is a collection of 35+ small C programs designed for worst
 | fibcall | `fibcall.c` | Iterative Fibonacci to F(47). Tests simple loop with register-pressure arithmetic. |
 
 These provide *real computation* as RT task bodies, unlike spin loops — validating that the scheduler works with genuine workloads, not just CPU-burning stubs.
+
+**Spin Loop Benchmarks (`rtbench`, `rtvestal`)**
+
+`rtbench` and `rtvestal` use CPU spin loops intentionally. Their purpose is to isolate scheduler timing behavior under controlled, worst-case load — each task consumes exactly its WCET every period with no computation variability. Introducing real task bodies in these benchmarks would conflate scheduler performance with execution time variance, obscuring the timing properties under test. Real computation task bodies are used in `rtmaladalen`, `rtdrone`, and `rtgui`, where the goal is to validate the scheduler against genuine workloads. `rtbench` and `rtvestal` serve a different role: they verify the scheduler's deadline enforcement mechanism under deterministic, maximally stressed conditions.
 
 ---
 
@@ -245,6 +249,8 @@ Live execution on real OS processes in QEMU (not simulation). Fixed exec = U_LO=
 | EDF | 5 | 23 | 28 |
 | RMS | 8 | 15 | 23 |
 
+The RR=0 result on this benchmark requires explanation. Round Robin achieves 0 HI-critical misses not because it is a good scheduler for mixed-criticality workloads, but because of an arithmetic coincidence: with 6 equally-weighted tasks and a tick-level quantum, RR allocates 1/6 of CPU time to each task. The HI-critical tasks in this taskset have long periods (50, 75, 100 ticks) and modest WCETs — their utilisation is low enough that receiving only 1/6 of CPU is still sufficient to meet every deadline. EDF, by contrast, actively and incorrectly steers CPU away from HI tasks: because HI tasks have far deadlines, EDF perpetually selects LO tasks (nearer deadlines), starving HI tasks entirely. RR's indifference to deadlines accidentally protects HI tasks in this specific configuration; on any taskset where U_HI > 1/n (where n is task count), RR would fail for the same reason it fails on rtbench.
+
 NN and MLFQ both achieve 0 HI-critical misses. MLFQ's protection is incidental: aging fires frequently enough relative to the long HI task periods that they are restored to high priority before their deadlines. EDF fails exactly as Vestal (2007) predicted.
 
 ### 4. xv6-riscv — Mälardalen WCET Ports (`rtmaladalen`, 200 ticks, U=1.16)
@@ -289,6 +295,44 @@ Models an interactive paint application (similar to MS Paint) with LFSR-driven i
 
 NN, EDF, and RMS all protect HI tasks — U=1.04 is below the overload threshold for the HI subset (U\_HI=0.55). MLFQ fails badly (13 HI misses): the render task (WCET=5) exceeds the Q0 budget of 2 ticks and is demoted to lower queues on its first job. From there it competes on equal footing with LO tasks, losing the render deadline repeatedly.
 
+Note: at U=1.04, the HI-critical subset (render + blit) has U\_HI=0.55 — well below the overload threshold. NN, EDF, and RMS all protect HI tasks trivially in this regime, so this benchmark does not demonstrate NN's criticality-awareness advantage over classical schedulers. Its value is in two other dimensions: first, it validates that the scheduler operates correctly on real computation task bodies (pixel rendering, BFS, CRC-32) rather than spin loops; second, it shows MLFQ's structural failure (13 HI misses) even under mild overload, because the render task's WCET exceeds MLFQ's Q0 quantum and triggers immediate demotion regardless of utilisation. A higher-load variant of this benchmark (U≈1.35–1.70) is described in the extended evaluation below.
+
+### Extended rtgui Evaluation (Higher Load)
+
+Two higher-load variants were implemented and benchmarked:
+
+**Option A (`rtgui_a`)** — heavier render (7×7 brush + 3×3 box blur pass) and blit (32×32 alpha blend at 75% opacity). Periods extended to render=25, blit=50. U\_HI=0.88, U\_LO=0.49, U\_total=1.37.
+
+**Option B (`rtgui_b`)** — compositor task (4-layer max-blend over 32×32, period=12) replaces undo\_snap. HI tasks unchanged from baseline. U\_HI=0.55, U\_LO=1.13, U\_total=1.69. Vestal structure: compositor (LO, T=12) has shorter period than render (HI, T=16).
+
+#### rtgui\_a (200 ticks, U\_total=1.37, U\_HI=0.88)
+
+| Scheduler | **HI-Crit Misses** | LO-Soft Misses | Total |
+|-----------|-------------------|----------------|-------|
+| EDF | 4 | 4 | 8 |
+| RMS | 4 | 3 | 7 |
+| **NN** | **7** | 3 | 10 |
+| MLFQ | 12 | 4 | 16 |
+| RR | 12 | 22 | 34 |
+
+On rtgui\_a, EDF and RMS edge out NN (4 vs 7 HI misses). This is the same structural coincidence as rtbench: U\_LO=0.49 < 1, so LO tasks do not monopolise the CPU. EDF's greedy deadline heuristic coincidentally aligns with the correct answer — shorter-period LO tasks (input\_poll T=8) don't collectively generate enough utilization to starve HI tasks. The Vestal failure mode does not activate. NN's general policy, which was trained to override deadlines for criticality, applies a cost when it isn't needed.
+
+#### rtgui\_b (200 ticks, U\_total=1.69, U\_HI=0.55)
+
+| Scheduler | **HI-Crit Misses** | LO-Soft Misses | Total |
+|-----------|-------------------|----------------|-------|
+| **NN** | **3** | 17 | 20 |
+| EDF | 10 | 18 | 28 |
+| RMS | 18 | 12 | 30 |
+| MLFQ | 19 | 31 | 50 |
+| RR | 18 | 44 | 62 |
+
+On rtgui\_b, NN achieves **70% fewer HI-critical misses than EDF** (3 vs 10). This is a clear Vestal failure scenario: the compositor task (LO, T=12, WCET=8) has a shorter period than render (HI, T=16, WCET=5). EDF perpetually selects compositor (nearest deadline every 12 ticks) before render (deadline at 16 ticks). HI render is starved for CPU: render gets 8 completions but 4 misses; blit gets 0 completions and 6 misses. NN, by contrast, completes render 10 times and blit 6 times with only 3 HI misses total.
+
+RMS performs even worse (18 HI misses): compositor (T=12) has a higher invocation rate than render (T=16), so RMS assigns compositor higher priority — the same failure mode as EDF but more severe. MLFQ fails catastrophically (19 HI misses): render (WCET=5) and blit (WCET=8) both exceed the Q0 quantum (2 ticks), so they are demoted on first scheduling and cannot compete with compositor.
+
+The rtgui\_b result confirms the Vestal (2007) prediction for a realistic GUI workload: when a heavy LO task has a shorter period than HI tasks and U\_LO > 1, any urgency-based or frequency-based scheduler systematically fails to protect HI tasks. The NN, trained with asymmetric criticality rewards, learns to protect HI tasks regardless of their relative deadline distance.
+
 ### 7. xv6-riscv — Drone Flight Controller (`rtdrone`, 200 ticks, U=1.50)
 
 Simulates a UAV mixed-criticality workload using Q10 fixed-point arithmetic: complementary AHRS filter, 3-axis PID controller with discrete plant model (pole at 0.95), and actuator mixer. HI-critical: imu\_read, ahrs\_filter, pid\_control (U\_crit=0.95). LO-soft: actuator\_upd, telemetry, data\_log.
@@ -311,9 +355,11 @@ EDF and RMS both achieve 0 HI-critical misses; NN gets 1. The single NN HI miss 
 | Vestal fixed exec (Python) | **2** | 7 | 13 | — | 0 |
 | Vestal xv6 | **0** | 5 | 8 | 0* | 0 |
 | Mälardalen xv6 | **0** | 1 | 4 | 0* | 3 |
-| GUI xv6 | **0** | 0 | 0 | 13 | 14 |
+| GUI xv6 (U=1.04) | **0** | 0 | 0 | 13 | 14 |
+| GUI-B compositor xv6 (U=1.69) | **3** | 10 | 18 | 19 | 18 |
 | Drone xv6 | 1 | **0** | **0** | 50 | 50 |
 | Realistic (rtbench) | 7 | **3** | 4 | 25 | 36 |
+| GUI-A heavier xv6 (U=1.37) | 7 | **4** | **4** | 12 | 12 |
 
 *MLFQ gets 0 HI misses on Vestal/Mälardalen only because the aging interval fires before HI task deadlines. This is not a design property — change the aging interval or task periods and HI protection disappears.
 
@@ -397,15 +443,17 @@ for each RT proc p:
 - Three-tier scheduler with starvation prevention for non-RT processes
 - 5 new syscalls: `rtregister`, `rtjobdone`, `rtstats`, `setscheduler`, `rtremaining`
 - RT logic in `clockintr()`: miss detection, job release, work decrement, MLFQ budget management
-- **Five benchmark programs**: `rtdemo`, `rtbench`, `rtvestal`, `rtmaladalen`, `rtgui`
+- **Seven benchmark programs**: `rtdemo`, `rtbench`, `rtvestal`, `rtmaladalen`, `rtgui`, `rtgui_a`, `rtgui_b`
 - **rtgui**: GUI paint application simulation — LFSR input, brush rendering, BFS flood fill, CRC-32, double-buffer blit, undo snapshot
+- **rtgui\_a**: higher-load variant — 7×7 brush + 3×3 blur, 32×32 alpha blend, U=1.37
+- **rtgui\_b**: Vestal-structure variant — compositor (LO, T=12) vs render (HI, T=16), U=1.69; demonstrates EDF failure under LO overload
 - **rtdrone** (rewritten): Q10 fixed-point AHRS filter and PID controller with discrete plant model (pole at 0.95)
-- **Six Mälardalen WCET benchmarks** ported as real computation task bodies; jfdctint (8×8 DCT) and ludcmp (5×5 LU) implemented as additional ports (documented)
+- **Six Mälardalen WCET benchmarks** ported as real computation task bodies in `rtmaladalen`; jfdctint (8×8 integer DCT) and ludcmp (5×5 LU decomposition) implemented as additional task bodies and documented in the benchmark provenance section
 - All existing xv6 functionality preserved; builds with `make qemu CPUS=1`
 
 ### Evaluation & Reporting
 - `gen_report.py`: parses CSV output from all five xv6 benchmarks, generates matplotlib charts and LaTeX tables
-- `scripts/bench_results.csv`: saved results for all five suites (BENCH/VESTAL/MALA/GUI/DRONE × NN/EDF/RMS/RR/MLFQ) — 25 suite×mode combinations
+- `scripts/bench_results.csv`: saved results for all seven suites (BENCH/VESTAL/MALA/GUI/DRONE/GUIA/GUIB × NN/EDF/RMS/RR/MLFQ) — 35 suite×mode combinations
 - Two chart types: HI-critical miss bar chart, stacked HI+LO miss chart
 
 ### Weight Export
@@ -421,17 +469,17 @@ This project demonstrates that a small neural network trained with PPO can serve
 
 ### What Was Built
 
-A complete end-to-end system: Python training environment → Q10 weight export → bare-metal ARM Cortex-M4 RTOS (Rust) → xv6-riscv integration (C). The NN runs as 72 integer multiply-accumulate operations inside the timer interrupt handler, with no floating point, no dynamic memory, and no external runtime. Five schedulers (NN, EDF, RMS, RR, MLFQ) were benchmarked across five tasksets (25 suite×mode combinations) on a real OS running in QEMU.
+A complete end-to-end system: Python training environment → Q10 weight export → bare-metal ARM Cortex-M4 RTOS (Rust) → xv6-riscv integration (C). The NN runs as 72 integer multiply-accumulate operations inside the timer interrupt handler, with no floating point, no dynamic memory, and no external runtime. Five schedulers (NN, EDF, RMS, RR, MLFQ) were benchmarked across seven tasksets (35 suite×mode combinations) on a real OS running in QEMU.
 
 ### When the NN Wins
 
-The NN's advantage is most pronounced on the **Vestal (2007) inverted-priority scenario**: when HI-critical tasks have longer periods than LO-soft tasks, EDF's greedy deadline heuristic starves HI tasks (5 HI misses on xv6-riscv). The NN achieves 0 HI-critical misses by learning to override deadline distance in favor of criticality — a policy that cannot be expressed by any urgency-based or frequency-based scheduler. On the Mälardalen WCET ports (real C computation), the NN again achieves 0 HI misses vs EDF's 1 and RMS's 4. On the GUI benchmark, NN matches EDF/RMS while MLFQ fails with 13 HI misses. In Python simulation on the Very Hard taskset (U=1.87), NN achieves 2.0 HI misses vs EDF's 4.9 (59% improvement) and vs RR's 50.8 (96% improvement).
+The NN's advantage is most pronounced on the **Vestal (2007) inverted-priority scenario**: when HI-critical tasks have longer periods than LO-soft tasks, EDF's greedy deadline heuristic starves HI tasks (5 HI misses on xv6-riscv). The NN achieves 0 HI-critical misses by learning to override deadline distance in favor of criticality — a policy that cannot be expressed by any urgency-based or frequency-based scheduler. On the Mälardalen WCET ports (real C computation), the NN again achieves 0 HI misses vs EDF's 1 and RMS's 4. On the GUI-B benchmark (compositor task creates Vestal LO overload at U=1.69), NN achieves 70% fewer HI misses than EDF (3 vs 10): the same Vestal failure mechanism reproduced in a realistic GUI workload. On the baseline GUI benchmark (U=1.04), NN matches EDF/RMS while MLFQ fails with 13 HI misses. In Python simulation on the Very Hard taskset (U=1.87), NN achieves 2.0 HI misses vs EDF's 4.9 (59% improvement) and vs RR's 50.8 (96% improvement).
 
 MLFQ is particularly instructive as a foil: it consistently fails when tasks have WCET > 2 ticks (the Q0 quantum), because it demotes all such tasks on their first job and cannot distinguish a safety-critical sensor loop from a background logger. On the drone benchmark, MLFQ produces 50 HI-critical misses — the same as Round Robin.
 
 ### When the NN Does Not Win
 
-On `rtbench` (U=1.90), EDF edges out NN (3 vs 7 HI misses) because the taskset's criticality and deadline ordering happen to coincide: shorter-period tasks are also the critical ones. EDF's greedy heuristic aligns with the right answer by structural coincidence. The NN, trained on random tasksets where this correlation is absent, pays a 4-miss penalty for having learned a general policy. This is not policy failure — the NN still outperforms MLFQ (7 vs 25) and RR (7 vs 36), and outperforms random scheduling by 65%. On the drone benchmark (U\_crit=0.95), EDF and RMS achieve 0 HI misses vs NN's 1; the difference is marginal and traceable to the AHRS filter task sitting precisely at the overload boundary.
+On `rtbench` (U=1.90) and `rtgui_a` (U=1.37), EDF edges out NN (rtbench: 3 vs 7; rtgui\_a: 4 vs 7) because neither taskset triggers the Vestal failure mode: LO utilization is below 1.0, so EDF's greedy heuristic coincidentally aligns with the correct answer without needing criticality awareness. The NN, trained on random tasksets where this correlation is absent, pays a small penalty for having learned a general policy. This is not policy failure — NN still outperforms MLFQ and RR by large margins on both benchmarks. On the drone benchmark (U\_crit=0.95), EDF and RMS achieve 0 HI misses vs NN's 1; the difference is marginal and traceable to the AHRS filter task sitting precisely at the overload boundary.
 
 ### Limitations
 

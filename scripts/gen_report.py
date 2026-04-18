@@ -48,6 +48,14 @@ CRIT_MAP = {
         "imu_read": True, "ahrs_filter": True, "pid_control": True,
         "actuator_upd": False, "telemetry": False, "data_log": False,
     },
+    "GUIA": {
+        "input_poll": False, "render": True, "blit": True,
+        "flood_fill": False, "crc_save": False, "undo_snap": False,
+    },
+    "GUIB": {
+        "input_poll": False, "render": True, "blit": True,
+        "compositor": False, "flood_fill": False, "crc_save": False,
+    },
 }
 
 SUITE_LABELS = {
@@ -56,6 +64,8 @@ SUITE_LABELS = {
     "MALA":   "Mälardalen (U=1.16)",
     "GUI":    "rtgui/MS Paint (U=1.04)",
     "DRONE":  "rtdrone Q10 (U=1.50)",
+    "GUIA":   "rtgui_a heavier (U=1.37)",
+    "GUIB":   "rtgui_b compositor (U=1.69)",
 }
 
 
@@ -63,7 +73,7 @@ def parse_input(lines):
     """
     Returns {suite: {mode: {task_name: (completions, misses, is_critical)}}}
     """
-    results = {"BENCH": {}, "VESTAL": {}, "MALA": {}, "GUI": {}, "DRONE": {}}
+    results = {"BENCH": {}, "VESTAL": {}, "MALA": {}, "GUI": {}, "DRONE": {}, "GUIA": {}, "GUIB": {}}
     in_csv = False
 
     for line in lines:
@@ -155,7 +165,7 @@ def latex_table(suite, data, caption_extra=""):
 
 def generate_chart(all_data, outdir="report_figures"):
     os.makedirs(outdir, exist_ok=True)
-    suites = [s for s in ["BENCH", "VESTAL", "MALA", "GUI", "DRONE"] if s in all_data]
+    suites = [s for s in ["BENCH", "VESTAL", "MALA", "GUI", "DRONE", "GUIA", "GUIB"] if s in all_data]
     modes  = ["NN", "EDF", "RMS", "RR", "MLFQ"]
 
     # ── Figure 1: HI-critical misses across all suites ──────────────

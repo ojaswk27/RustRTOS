@@ -152,6 +152,8 @@ UPROGS=\
 	$U/_rtvestal\
 	$U/_rtmaladalen\
 	$U/_rtgui\
+	$U/_rtgui_a\
+	$U/_rtgui_b\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
