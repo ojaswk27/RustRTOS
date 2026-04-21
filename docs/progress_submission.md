@@ -209,6 +209,217 @@ Curriculum learning is a third distinction. DeepRM trains on a fixed job distrib
 
 ---
 
+## Complete Taskset Specifications
+
+Every taskset — Python and xv6 — uses the same lifecycle model. Each task is a periodic job with three parameters: **period** (how often it fires, in ticks), **deadline** (how many ticks it has to finish, always equal to period here), and **WCET** (worst-case execution time budget in ticks). The scheduler gets one CPU tick per scheduling decision. A task "misses" if its deadline passes before it finishes its current job.
+
+**Tick rate:** 1 tick = ~100 ms on xv6 (CLINT 10 MHz, interval = 1,000,000 cycles). Python simulation uses dimensionless ticks.
+
+**Task lifecycle (xv6):**
+1. Parent forks one process per task and waits via `pause(SIM_TICKS)`.
+2. Each child calls `rtregister(slot, period, deadline, wcet, criticality)` then `rtjobdone()` to sleep until its first period boundary.
+3. Each tick the kernel's `clockintr()` increments `rt_ticks`, releases any task whose `next_release` has arrived, and checks for deadline misses.
+4. The selected scheduler picks the next task; that task runs `while(rtremaining() > 0) { work(); }` then calls `rtjobdone()` to yield and record a completion.
+5. After `SIM_TICKS` ticks the parent wakes, calls `rtstats(slot, &misses, &completions)` for each slot, and prints CSV output.
+
+---
+
+### Python Simulation Tasksets
+
+All Python tasksets use 6 tasks with implicit deadlines (deadline = period). Tasks T0–T2 are HI-critical (criticality weight 5.0), T3–T5 are LO-soft (weight 1.0) under `MIXED_CRITICALITY`. Each episode runs for 300 ticks. `RandomRTOSEnv` samples a fresh taskset every episode from `CANDIDATE_PERIODS = [5,10,15,20,25,30,50,100]` with utilization drawn from the curriculum range.
+
+#### Normal (U = 1.03) — EDF-optimal baseline
+
+| Slot | Period | WCET | U_i |
+|------|--------|------|-----|
+| T0 | 10 | 2 | 0.200 |
+| T1 | 15 | 3 | 0.200 |
+| T2 | 20 | 4 | 0.200 |
+| T3 | 30 | 5 | 0.167 |
+| T4 | 50 | 8 | 0.160 |
+| T5 | 100 | 10 | 0.100 |
+
+U < 1 with equal criticality — Liu & Layland (1973) regime. EDF is provably optimal here; NN matches it (both 0 misses). Used to verify the agent doesn't over-fit to stressed conditions.
+
+#### Stressed (U = 1.15) — mild overload
+
+| Slot | Period | WCET | U_i |
+|------|--------|------|-----|
+| T0 | 10 | 3 | 0.300 |
+| T1 | 15 | 3 | 0.200 |
+| T2 | 20 | 4 | 0.200 |
+| T3 | 30 | 5 | 0.167 |
+| T4 | 50 | 8 | 0.160 |
+| T5 | 100 | 12 | 0.120 |
+
+Misses are unavoidable (U > 1). Mixed criticality begins to matter: the agent must choose which tasks absorb the overload.
+
+#### Hard (U = 1.57) — high overload, variable execution
+
+| Slot | Period | WCET | U_i |
+|------|--------|------|-----|
+| T0 | 10 | 4 | 0.400 |
+| T1 | 15 | 5 | 0.333 |
+| T2 | 20 | 5 | 0.250 |
+| T3 | 30 | 7 | 0.233 |
+| T4 | 50 | 10 | 0.200 |
+| T5 | 100 | 15 | 0.150 |
+
+`variable_exec=True` means each job's actual execution time is sampled uniformly from `[WCET/2, WCET]`. The agent sees `remaining_ratio` in its state, so it can observe how much work a task actually has left this job — unlike EDF or RMS which schedule purely from static parameters.
+
+#### Very Hard (U = 1.87) — main comparison taskset
+
+| Slot | Period | WCET | U_i |
+|------|--------|------|-----|
+| T0 | 10 | 5 | 0.500 |
+| T1 | 15 | 6 | 0.400 |
+| T2 | 20 | 7 | 0.350 |
+| T3 | 30 | 8 | 0.267 |
+| T4 | 50 | 12 | 0.240 |
+| T5 | 100 | 20 | 0.200 |
+
+U_HI = 1.25 alone exceeds 1 — even if only critical tasks run, they can't all meet their deadlines. The scheduler must still minimise HI misses. Key Python result: PPO achieves 2.0 HI misses vs EDF's 4.9 (59% reduction).
+
+#### Vestal MC (U = 1.33) — inverted-priority scenario
+
+| Slot | Criticality | Period | WCET | U_i | Role |
+|------|-------------|--------|------|-----|------|
+| T0 | **HI** | 50 | 5 | 0.100 | Flight control |
+| T1 | **HI** | 75 | 6 | 0.080 | Safety monitor |
+| T2 | **HI** | 100 | 7 | 0.070 | Actuator command |
+| T3 | LO | 5 | 2 | 0.400 | Sensor poll |
+| T4 | LO | 8 | 3 | 0.375 | Telemetry |
+| T5 | LO | 10 | 3 | 0.300 | Log write |
+
+U_LO = 1.075 > 1: soft tasks alone overflow the CPU. EDF always picks T3–T5 first (deadlines 5, 8, 10 vs 50, 75, 100) — HI tasks starve. Python result: PPO 2 HI misses vs EDF 7 (71% reduction).
+
+---
+
+### xv6 Benchmark Programs
+
+#### `rtbench` — Realistic IoT Workload (U = 1.90)
+
+Models a sensor-driven embedded application: sensor fusion feeding a control loop feeding a display, plus background telemetry/logging.
+
+| Slot | Name | Period | Deadline | WCET | Criticality | Task body |
+|------|------|--------|----------|------|-------------|-----------|
+| T0 | `sensor_read` | 10 | 10 | 4 | **HI** | Spin loop simulating IMU/ADC read at 100 Hz |
+| T1 | `control_loop` | 20 | 20 | 7 | **HI** | Spin loop simulating PID controller at 50 Hz |
+| T2 | `display_render` | 33 | 33 | 10 | **HI** | Spin loop simulating UI frame render at 30 fps |
+| T3 | `network_send` | 100 | 100 | 25 | LO | Spin loop simulating telemetry transmission at 10 Hz |
+| T4 | `data_logging` | 200 | 200 | 60 | LO | Spin loop simulating file write at 5 Hz |
+| T5 | `background_sync` | 500 | 500 | 150 | LO | Spin loop simulating cloud sync at 2 Hz |
+
+U_total = 1.90, U_HI = 1.05. Uses spin loops (`for(volatile int i=0; i<10000; i++)`). EDF happens to win here (3 misses vs NN's 7) because HI task periods (10, 20, 33) are shorter than LO task periods (100–500) — criticality and urgency accidentally correlate, so EDF's greedy rule accidentally picks the right tasks.
+
+---
+
+#### `rtvestal` — Vestal (2007) Inverted-Priority (U = 1.33)
+
+Direct implementation of the Vestal (2007) failure scenario.
+
+| Slot | Name | Period | Deadline | WCET | Criticality | Task body |
+|------|------|--------|----------|------|-------------|-----------|
+| T0 | `flight_ctrl` | 50 | 50 | 5 | **HI** | Spin loop — flight attitude control |
+| T1 | `safety_mon` | 75 | 75 | 6 | **HI** | Spin loop — safety monitor |
+| T2 | `actuator_cmd` | 100 | 100 | 7 | **HI** | Spin loop — actuator command |
+| T3 | `sensor_poll` | 5 | 5 | 2 | LO | Spin loop — high-frequency sensor poll |
+| T4 | `telemetry` | 8 | 8 | 3 | LO | Spin loop — telemetry burst |
+| T5 | `log_write` | 10 | 10 | 3 | LO | Spin loop — log write |
+
+U_HI = 0.25, U_LO = 1.075, U_total = 1.325. HI tasks have periods 5–20× longer than LO tasks. EDF always sees a LO task with a nearer deadline, so it never runs HI tasks proactively. xv6 result: NN 0 HI misses, EDF 5 HI misses — direct confirmation of Vestal's prediction.
+
+---
+
+#### `rtmaladalen` — Mälardalen WCET Ports (U = 1.16)
+
+Uses the same inverted-priority structure as rtvestal but replaces spin loops with real benchmark computations ported from the Mälardalen suite.
+
+| Slot | Name | Period | Deadline | WCET | Criticality | Task body |
+|------|------|--------|----------|------|-------------|-----------|
+| T0 | `matmul` | 60 | 60 | 12 | **HI** | 10×10 integer matrix multiply: `C[i][j] = Σ A[i][k]*B[k][j]` — 300 MACs per call |
+| T1 | `bsort100` | 50 | 50 | 8 | **HI** | Bubble sort of 100 integers: O(n²) worst-case comparisons, in-place |
+| T2 | `crc` | 40 | 40 | 6 | **HI** | CRC-32 over 64-byte string: nibble-based lookup table, polynomial 0xEDB88320 |
+| T3 | `prime` | 10 | 10 | 3 | LO | Primality test of 999983 via trial division up to √n (~1000 iterations) |
+| T4 | `cnt` | 15 | 15 | 3 | LO | Count negatives in 100-element array (every 3rd element is negative) |
+| T5 | `fibcall` | 20 | 20 | 3 | LO | Iterative Fibonacci to F(47) = 2,971,215,073 (unsigned, wraps safely) |
+
+U_HI = 0.51, U_LO = 0.65, U_total = 1.16. Each task calls its benchmark function repeatedly inside `while(rtremaining() > 0)` — the function executes as many times as the CPU budget allows each period. Because these are real computations, execution time varies slightly with data, but all loops are bounded so WCET is analyzable.
+
+Also implemented (compiled as `__attribute__((unused))`, not scheduled):
+- **`jfdctint`**: 8×8 integer JPEG DCT using scaled fixed-point arithmetic (row + column passes)
+- **`ludcmp`**: 5×5 LU decomposition (Doolittle algorithm, values scaled ×256 to avoid floating-point)
+
+---
+
+#### `rtgui` — GUI Paint Application Baseline (U = 1.04)
+
+Models the computational subsystems of an interactive paint application. All task bodies operate on a static 64×64 byte framebuffer.
+
+| Slot | Name | Period | Deadline | WCET | Criticality | Task body |
+|------|------|--------|----------|------|-------------|-----------|
+| T0 | `input_poll` | 8 | 8 | 2 | LO | 16-bit LFSR generates synthetic pointer events (x, y) and pushes them to a circular event queue (`evqueue[16]`) |
+| T1 | `render` | 16 | 16 | 5 | **HI** | Pops one event; paints a 5×5 Gaussian brush stroke: `intensity = 255 - 40*(dx²+dy²)`, clamped to [0,255], written to `framebuf[y][x]` |
+| T2 | `blit` | 33 | 33 | 8 | **HI** | Copies 16×16 region from `framebuf` to `backbuf` — double-buffer swap simulation |
+| T3 | `flood_fill` | 100 | 100 | 20 | LO | Bounded BFS paint-bucket fill from a seed pixel: uses a 64-entry queue, 4-connected, stops at boundary pixels or queue exhaustion |
+| T4 | `crc_save` | 200 | 200 | 3 | LO | CRC-32 over 64 bytes of framebuffer data — simulates save-to-file integrity check |
+| T5 | `undo_snap` | 500 | 500 | 10 | LO | Copies entire `framebuf` to `backbuf` — undo history snapshot |
+
+U_total = 1.04. Vestal structure: LO `input_poll` (period=8) has a nearer deadline than HI `render` (period=16). EDF always picks input_poll first. At U=1.04 the overload is small enough that EDF, RMS, and NN all achieve 0 HI misses — confirms Liu & Layland regime.
+
+---
+
+#### `rtgui_a` — Heavier GUI Variant (U = 1.37)
+
+Same structure as `rtgui` but with significantly heavier render and blit task bodies. Designed so U_LO < 1 — the Vestal failure mode does NOT trigger; EDF is expected to win or tie.
+
+| Slot | Name | Period | Deadline | WCET | Criticality | Task body |
+|------|------|--------|----------|------|-------------|-----------|
+| T0 | `input_poll` | 8 | 8 | 2 | LO | Same LFSR event generation as rtgui |
+| T1 | `render` | 25 | 25 | 12 | **HI** | **Pass 1:** 7×7 brush stroke with `intensity = 255 - 18*(dx²+dy²)` (49 pixels). **Pass 2:** 3×3 box blur over the ±2 neighbourhood of the paint point — each output pixel = mean of its 3×3 kernel |
+| T2 | `blit` | 50 | 50 | 20 | **HI** | 32×32 alpha blend at 75% opacity: `out = (192*back + 64*front) >> 8` — 1024 blended pixels per call |
+| T3 | `flood_fill` | 100 | 100 | 20 | LO | Same bounded BFS as rtgui |
+| T4 | `crc_save` | 200 | 200 | 3 | LO | Same CRC-32 as rtgui |
+| T5 | `undo_snap` | 500 | 500 | 10 | LO | Same snapshot as rtgui |
+
+U_HI = 0.88, U_LO = 0.485, U_total = 1.365. Because U_LO < 1, soft tasks alone don't overflow the CPU — EDF can serve them all and still have budget for HI tasks. EDF edges NN here (4 vs 7 HI misses), confirming that the Vestal failure requires U_LO > 1.
+
+---
+
+#### `rtgui_b` — Compositor Vestal Scenario (U = 1.69)
+
+Replaces `undo_snap` with a `compositor` task that is LO-soft but has a shorter period than the HI `render` task — directly recreating the Vestal (2007) failure mode in a GUI workload.
+
+| Slot | Name | Period | Deadline | WCET | Criticality | Task body |
+|------|------|--------|----------|------|-------------|-----------|
+| T0 | `input_poll` | 8 | 8 | 2 | LO | Same LFSR event generation |
+| T1 | `render` | 16 | 16 | 5 | **HI** | Same 5×5 Gaussian brush stroke as rtgui |
+| T2 | `blit` | 33 | 33 | 8 | **HI** | Same 16×16 double-buffer copy as rtgui |
+| T3 | `compositor` | 12 | 12 | 8 | LO | **4-layer max-blend over 32×32:** iterates `layers[0..3][y][x]`, takes the per-pixel maximum across all 4 layers, writes result to `framebuf[y][x]`. Layers are initialised once with pattern `(l*64 + y + x) & 0xFF`. 4096 pixel operations per call |
+| T4 | `flood_fill` | 100 | 100 | 20 | LO | Same bounded BFS |
+| T5 | `crc_save` | 200 | 200 | 3 | LO | Same CRC-32 |
+
+U_HI = 0.555, U_LO = 1.132, U_total = 1.687. The compositor (LO, T=12) has a shorter period than render (HI, T=16) — EDF perpetually picks compositor first. xv6 result: NN 3 HI misses vs EDF 10 (70% reduction). This is the strongest demonstration of NN advantage in the GUI suite.
+
+---
+
+#### `rtdrone` — Drone Flight Controller (U = 1.50)
+
+Uses Q10 fixed-point arithmetic with a discrete plant model. State persists across job releases (static variables outside the job loop). All tasks share `imu_*`, `ahrs_q[]`, `plant_x[]`, `pid_*`, and `motor[]` arrays via the process's static BSS — each forked child gets its own copy of the state, modelling independent per-axis computation.
+
+| Slot | Name | Period | Deadline | WCET | Criticality | Task body |
+|------|------|--------|----------|------|-------------|-----------|
+| T0 | `imu_read` | 10 | 10 | 3 | **HI** | 16-bit Galois LFSR (`0xB400` taps) drives synthetic gyro values: `gx = (lfsr & 0x1F) - 16`, `gy/gz` similarly from higher bits. Writes `imu_gx/gy/gz`. Simulates 100 Hz IMU |
+| T1 | `ahrs_filter` | 10 | 10 | 4 | **HI** | Q10 complementary filter: `roll = (972*roll + 51*gx) >> 10`, same for pitch. The coefficient 972/1024 ≈ 0.95 is the discrete integrator pole; 51/1024 ≈ 0.05 is the gyro gain. Approximates quaternion magnitude normalisation |
+| T2 | `pid_control` | 20 | 20 | 5 | **HI** | 3-axis PID loop. Error = `ref_angle[ax] - plant_x[ax]` (reference is level flight = 0). Integral clamped to ±4096 (anti-windup). Control output `u = Kp*err + Ki*integral + Kd*deriv` with Q10 coefficients Kp=800, Ki=10, Kd=200. Updates plant: `x[k+1] = (972*x[k] + 51*u[k]) >> 10` |
+| T3 | `actuator_upd` | 20 | 20 | 2 | **HI** | Motor mixer: converts roll/pitch plant state to 4 motor PWM setpoints. `motor[0] = base + roll - pitch`, etc., where base = Q10_ONE/2 = 512 |
+| T4 | `telemetry` | 100 | 100 | 20 | LO | Spin loop simulating GCS telemetry packet transmission at 10 Hz |
+| T5 | `data_log` | 200 | 200 | 50 | LO | Spin loop simulating flight data recorder write at 5 Hz |
+
+U_HI = 1.05, U_LO = 0.45, U_total = 1.50. U_LO < 1, so Vestal failure does not apply. EDF and RMS both achieve 0 HI misses; NN achieves 1 (the single miss is the AHRS filter task at the overload boundary). This benchmark demonstrates the regime where classical schedulers are sufficient.
+
+---
+
 ## Results
 
 ### 1. Python Simulation — Very Hard Taskset (U=1.87, Mixed Criticality)
